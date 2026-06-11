@@ -1,7 +1,7 @@
 from django.core.management.base import BaseCommand
 from django.contrib.auth.models import User
 from django.utils.text import slugify
-from users.models import PermissionAtom, Profile, ProfilePermission
+from users.models import PermissionAtom, Profile, ProfilePermission, UserProfileAssignment
 from catalog.models import Category, Product
 from orders.models import Subscription
 

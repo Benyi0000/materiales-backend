@@ -13,13 +13,36 @@ class RegisterSerializer(serializers.ModelSerializer):
         model = User
         fields = ('username', 'email', 'password', 'first_name', 'last_name')
 
+    def validate_username(self, value):
+        if User.objects.filter(username__iexact=value).exists():
+            raise serializers.ValidationError("Ya existe un usuario con este nombre.")
+        return value
+
+    def validate_email(self, value):
+        if User.objects.filter(email__iexact=value).exists():
+            raise serializers.ValidationError("Este correo ya está en uso.")
+        return value
+
+    def validate_password(self, value):
+        import re
+        if len(value) < 8:
+            raise serializers.ValidationError("La contraseña debe tener al menos 8 caracteres.")
+        if not re.search(r'[A-Z]', value):
+            raise serializers.ValidationError("La contraseña debe contener al menos una letra mayúscula.")
+        if not re.search(r'[a-z]', value):
+            raise serializers.ValidationError("La contraseña debe contener al menos una letra minúscula.")
+        if not re.search(r'[0-9]', value):
+            raise serializers.ValidationError("La contraseña debe contener al menos un número.")
+        return value
+
     def create(self, validated_data):
         user = User.objects.create_user(
             username=validated_data['username'],
             email=validated_data['email'],
             password=validated_data['password'],
             first_name=validated_data.get('first_name', ''),
-            last_name=validated_data.get('last_name', '')
+            last_name=validated_data.get('last_name', ''),
+            is_active=False
         )
         return user
 

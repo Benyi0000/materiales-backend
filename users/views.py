@@ -20,10 +20,19 @@ from .tasks import send_password_reset_email
 class RegisterView(generics.CreateAPIView):
     """
     API para registrar nuevos usuarios.
-    Asigna automáticamente el perfil base "Comprar en la tienda".
     """
     serializer_class = RegisterSerializer
     permission_classes = [AllowAny]
+
+    def perform_create(self, serializer):
+        user = serializer.save()
+        from django.contrib.auth.tokens import default_token_generator
+        from django.utils.http import urlsafe_base64_encode
+        from django.utils.encoding import force_bytes
+        from .tasks import send_verification_email
+        token = default_token_generator.make_token(user)
+        uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
+        send_verification_email.delay(user.id, token, uidb64)
 
 
 class GoogleOAuthView(APIView):
@@ -46,11 +55,19 @@ class GoogleOAuthView(APIView):
         # idinfo = id_token.verify_oauth2_token(token, requests.Request(), CLIENT_ID)
         # email = idinfo['email']
 
+        # Generar un username único case-insensitive
+        base_username = email.split('@')[0]
+        username = base_username
+        counter = 1
+        while User.objects.filter(username__iexact=username).exclude(email__iexact=email).exists():
+            username = f"{base_username}{counter}"
+            counter += 1
+
         # Buscar o crear usuario
         user, created = User.objects.get_or_create(
             email=email,
             defaults={
-                'username': email.split('@')[0], # Nombre de usuario por defecto
+                'username': username, # Nombre de usuario único
                 'first_name': first_name,
                 'last_name': last_name
             }
@@ -383,6 +400,10 @@ class PasswordResetConfirmView(APIView):
         # Establecer la nueva contraseña
         user.set_password(new_password)
         user.save()
+        
+        from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
+        for tk in OutstandingToken.objects.filter(user=user):
+            BlacklistedToken.objects.get_or_create(token=tk)
 
         # Loguear la acción en la auditoría
         try:
@@ -400,3 +421,23 @@ class PasswordResetConfirmView(APIView):
 
         return Response({"status": "Contraseña restablecida con éxito. Ya puedes iniciar sesión."}, status=status.HTTP_200_OK)
 
+
+
+class VerifyEmailView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        token = request.data.get('token')
+        uidb64 = request.data.get('uid')
+        if not token or not uidb64:
+            return Response({"error": "Faltan parámetros."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            uid = force_str(urlsafe_base64_decode(uidb64))
+            user = User.objects.get(pk=uid)
+        except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+            return Response({"error": "Enlace inválido."}, status=status.HTTP_400_BAD_REQUEST)
+        if not default_token_generator.check_token(user, token):
+            return Response({"error": "El enlace ha expirado o es inválido."}, status=status.HTTP_400_BAD_REQUEST)
+        user.is_active = True
+        user.save()
+        return Response({"status": "Cuenta activada con éxito."}, status=status.HTTP_200_OK)

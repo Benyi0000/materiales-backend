@@ -28,6 +28,8 @@ INSTALLED_APPS = [
     
     # Librerías de terceros
     'rest_framework',
+    'rest_framework_simplejwt.token_blacklist',
+    'axes',
     'django_filters',
     'corsheaders',
     'pgvector',
@@ -48,6 +50,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'axes.middleware.AxesMiddleware',
 ]
 
 ROOT_URLCONF = 'config.urls'
@@ -164,6 +167,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 EMAIL_BACKEND = os.environ.get('EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend')
 
 AUTHENTICATION_BACKENDS = [
+    'axes.backends.AxesBackend',
     'users.backends.EmailOrUsernameModelBackend',
     'django.contrib.auth.backends.ModelBackend',
 ]
@@ -171,3 +175,9 @@ AUTHENTICATION_BACKENDS = [
 # Configuración de Archivos Media (Imágenes de productos subidas)
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+# Axes Config
+AXES_FAILURE_LIMIT = 5
+AXES_COOLOFF_TIME = 15 / 60
+AXES_LOCKOUT_PARAMETERS = ['ip_address', 'username']
+

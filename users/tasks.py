@@ -81,3 +81,21 @@ def send_password_reset_email(self, user_id, token, uidb64):
         logger.warning(f"Error al enviar email de recuperación a usuario {user_id}. Reintentando...")
         raise self.retry(exc=exc)
 
+@shared_task
+def send_verification_email(user_id, token, uid):
+    from django.contrib.auth.models import User
+    from django.core.mail import send_mail
+    from django.conf import settings
+    try:
+        user = User.objects.get(id=user_id)
+        verification_url = f'http://localhost:3000/auth/verify?uid={uid}&token={token}'
+        subject = 'Verifica tu cuenta'
+        message = f'Hola {user.username},\n\nPor favor, verifica tu cuenta haciendo clic en el siguiente enlace:\n{verification_url}'
+        send_mail(
+            subject, 
+            message, 
+            getattr(settings, 'DEFAULT_FROM_EMAIL', 'no-reply@construccion.com'), 
+            [user.email]
+        )
+    except User.DoesNotExist:
+        pass

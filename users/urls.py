@@ -2,9 +2,10 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from .views import (
-    RegisterView, GoogleOAuthView, UserProfileView, AdminUserListView,
-    AdminUserProfilesView, AdminProfileViewSet, PermissionAtomListView, PermissionAuditLogListView,
-    PasswordResetRequestView, PasswordResetConfirmView
+    RegisterView, UserProfileView, GoogleOAuthView,
+    AdminUserListView, AdminUserProfilesView, AdminProfileViewSet,
+    PermissionAtomListView, PermissionAuditLogListView,
+    PasswordResetRequestView, PasswordResetConfirmView, VerifyEmailView
 )
 
 router = DefaultRouter()
@@ -15,6 +16,7 @@ urlpatterns = [
     path('auth/register/', RegisterView.as_view(), name='auth-register'),
     path('auth/login/', TokenObtainPairView.as_view(), name='auth-login'),
     path('auth/token/refresh/', TokenRefreshView.as_view(), name='auth-token-refresh'),
+    path('auth/verify-email/', VerifyEmailView.as_view(), name='auth-verify-email'),
     path('auth/password-reset/', PasswordResetRequestView.as_view(), name='password-reset-request'),
     path('auth/password-reset-confirm/', PasswordResetConfirmView.as_view(), name='password-reset-confirm'),
     
