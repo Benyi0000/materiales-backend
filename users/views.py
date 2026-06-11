@@ -441,3 +441,21 @@ class VerifyEmailView(APIView):
         user.is_active = True
         user.save()
         return Response({"status": "Cuenta activada con éxito."}, status=status.HTTP_200_OK)
+
+class CheckUsernameView(APIView):
+    permission_classes = [AllowAny]
+    def get(self, request):
+        username = request.query_params.get('username', '').strip()
+        if not username:
+            return Response({'error': 'Se requiere el parámetro username'}, status=status.HTTP_400_BAD_REQUEST)
+        exists = User.objects.filter(username__iexact=username).exists()
+        return Response({'available': not exists}, status=status.HTTP_200_OK)
+
+class CheckEmailView(APIView):
+    permission_classes = [AllowAny]
+    def get(self, request):
+        email = request.query_params.get('email', '').strip()
+        if not email:
+            return Response({'error': 'Se requiere el parámetro email'}, status=status.HTTP_400_BAD_REQUEST)
+        exists = User.objects.filter(email__iexact=email).exists()
+        return Response({'available': not exists}, status=status.HTTP_200_OK)

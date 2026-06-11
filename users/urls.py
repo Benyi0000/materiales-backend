@@ -5,7 +5,8 @@ from .views import (
     RegisterView, UserProfileView, GoogleOAuthView,
     AdminUserListView, AdminUserProfilesView, AdminProfileViewSet,
     PermissionAtomListView, PermissionAuditLogListView,
-    PasswordResetRequestView, PasswordResetConfirmView, VerifyEmailView
+    PasswordResetRequestView, PasswordResetConfirmView, VerifyEmailView,
+    CheckUsernameView, CheckEmailView
 )
 
 router = DefaultRouter()
@@ -13,6 +14,8 @@ router.register(r'admin/profiles', AdminProfileViewSet, basename='admin-profiles
 
 urlpatterns = [
     # Autenticación estándar
+    path('auth/check-username/', CheckUsernameView.as_view(), name='check-username'),
+    path('auth/check-email/', CheckEmailView.as_view(), name='check-email'),
     path('auth/register/', RegisterView.as_view(), name='auth-register'),
     path('auth/login/', TokenObtainPairView.as_view(), name='auth-login'),
     path('auth/token/refresh/', TokenRefreshView.as_view(), name='auth-token-refresh'),
