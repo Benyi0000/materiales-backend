@@ -48,10 +48,9 @@ class ProductViewSet(viewsets.ModelViewSet):
         if self.action == 'create':
             self.required_permission = 'catalogo.crear_producto'
         elif self.action in ['update', 'partial_update']:
-            if 'stock' in self.request.data and len(self.request.data) <= 2:
-                self.required_permission = 'catalogo.gestionar_stock'
-            else:
-                self.required_permission = 'catalogo.editar_producto'
+            self.required_permission = 'catalogo.editar_producto'
+        elif self.action == 'stock':
+            self.required_permission = 'catalogo.gestionar_stock'
         elif self.action == 'destroy':
             self.required_permission = 'catalogo.eliminar_producto'
         elif self.action == 'semantic_search':
@@ -107,6 +106,37 @@ class ProductViewSet(viewsets.ModelViewSet):
                 {"status": "Producto eliminado físicamente con éxito."},
                 status=status.HTTP_204_NO_CONTENT
             )
+
+    @action(detail=True, methods=['patch'])
+    def stock(self, request, pk=None):
+        """
+        Ajuste rápido de stock. Requiere el permiso 'catalogo.gestionar_stock'.
+        Solo acepta el campo 'stock' (y un 'reason' opcional para auditoría);
+        cualquier otro campo del producto exige 'catalogo.editar_producto' vía PATCH estándar.
+        Ejemplo: PATCH /api/catalog/products/5/stock/  {"stock": 20, "reason": "Reposición"}
+        """
+        product = self.get_object()
+
+        if 'stock' not in request.data:
+            return Response({"error": "Debe proporcionar el campo 'stock'."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            new_stock = int(request.data['stock'])
+        except (TypeError, ValueError):
+            return Response({"error": "El campo 'stock' debe ser un número entero."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if new_stock < 0:
+            return Response({"error": "El stock no puede ser negativo."}, status=status.HTTP_400_BAD_REQUEST)
+
+        old_stock = product.stock
+        product.stock = new_stock
+        product.save(update_fields=['stock'])
+
+        reason = request.data.get('reason', 'Ajuste manual de inventario')
+        logger.info(f"AUDIT [Ajuste de Stock]: El usuario {request.user.username} ajustó el stock del producto SKU: {product.sku} ({product.name}) de {old_stock} a {new_stock}. Motivo: {reason}.")
+
+        serializer = self.get_serializer(product)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=['get'])
     def semantic_search(self, request):

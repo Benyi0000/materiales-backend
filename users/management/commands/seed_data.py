@@ -44,6 +44,9 @@ class Command(BaseCommand):
             ('gestion.exportar_reportes', 'gestion', 'Exportar reportes de pedidos/stock'),
             ('gestion.gestionar_banners', 'gestion', 'Crear y ordenar banners del home'),
             ('gestion.gestionar_promociones', 'gestion', 'Crear cupones y descuentos'),
+
+            # Marketing
+            ('marketing.gestionar_cupones', 'marketing', 'Crear y administrar cupones de descuento'),
             
             # Administración
             ('admin.gestionar_usuarios', 'admin', 'Crear, editar, activar/desactivar usuarios'),
