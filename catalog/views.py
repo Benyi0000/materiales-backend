@@ -1,5 +1,6 @@
 import logging
 from rest_framework import viewsets, generics, filters, status
+from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
@@ -53,6 +54,8 @@ class ProductViewSet(viewsets.ModelViewSet):
                 self.required_permission = 'catalogo.editar_producto'
         elif self.action == 'destroy':
             self.required_permission = 'catalogo.eliminar_producto'
+        elif self.action == 'semantic_search':
+            self.required_permission = 'catalogo.busqueda_semantica'
         else:
             self.required_permission = 'catalogo.ver_catalogo'
 
@@ -104,6 +107,97 @@ class ProductViewSet(viewsets.ModelViewSet):
                 {"status": "Producto eliminado físicamente con éxito."},
                 status=status.HTTP_204_NO_CONTENT
             )
+
+    @action(detail=False, methods=['get'])
+    def semantic_search(self, request):
+        """
+        Realiza una búsqueda vectorial RAG en base a similitud de significados.
+        Ejemplo: GET /api/catalog/products/semantic_search/?q=pegamento fuerte
+        """
+        query = request.query_params.get('q', '').strip()
+        if not query:
+            return Response({"error": "Debe proporcionar un parámetro de búsqueda 'q'."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 1. Vectorizar la consulta usando Google Gemini
+        import os
+        from django.conf import settings
+        import google.generativeai as genai
+        
+        api_key = getattr(settings, "GOOGLE_API_KEY", "")
+        if not api_key:
+            api_key = os.environ.get("GOOGLE_API_KEY", "")
+            
+        if not api_key:
+            return self._fallback_text_search(query)
+            
+        try:
+            genai.configure(api_key=api_key)
+            result = genai.embed_content(
+                model="models/gemini-embedding-2",
+                content=query,
+                task_type="retrieval_query"
+            )
+            
+            if not result or 'embedding' not in result:
+                return self._fallback_text_search(query)
+                
+            query_vector = result['embedding']
+            
+            # 2. Búsqueda Vectorial (Si pgvector está disponible)
+            from django.conf import settings
+            import numpy as np
+            
+            db_engine = settings.DATABASES['default']['ENGINE']
+            
+            if 'sqlite' in db_engine:
+                # Calcular distancia en memoria usando numpy (para entorno de desarrollo con SQLite)
+                query_np = np.array(query_vector)
+                products_list = list(Product.objects.filter(is_active=True, embedding__isnull=False))
+                
+                for p in products_list:
+                    p_emb = np.array(p.embedding)
+                    p.distance = np.linalg.norm(p_emb - query_np)
+                
+                # Ordenar por menor distancia
+                products_list.sort(key=lambda x: x.distance)
+                top_products = products_list[:10]
+                
+                serializer = self.get_serializer(top_products, many=True)
+                return Response({
+                    "results": serializer.data,
+                    "search_type": "semantic",
+                    "message": "Resultados basados en búsqueda de IA (Gemini / In-memory SQLite)."
+                })
+            else:
+                try:
+                    from pgvector.django import L2Distance
+                    products = Product.objects.filter(is_active=True, embedding__isnull=False).order_by(L2Distance('embedding', query_vector))[:10]
+                    
+                    serializer = self.get_serializer(products, many=True)
+                    return Response({
+                        "results": serializer.data,
+                        "search_type": "semantic",
+                        "message": "Resultados basados en búsqueda de inteligencia artificial (Gemini)."
+                    })
+                except ImportError:
+                    return self._fallback_text_search(query)
+                
+        except Exception as e:
+            logger.error(f"Excepción en búsqueda semántica (Gemini): {str(e)}")
+            return self._fallback_text_search(query)
+            
+    def _fallback_text_search(self, query):
+        """Si la API de vectores falla o no hay pgvector, hacemos búsqueda tradicional de texto."""
+        from django.db.models import Q
+        products = Product.objects.filter(
+            Q(is_active=True) & (Q(name__icontains=query) | Q(description__icontains=query))
+        )[:10]
+        serializer = self.get_serializer(products, many=True)
+        return Response({
+            "results": serializer.data,
+            "search_type": "text_fallback",
+            "message": "Mostrando resultados clásicos (búsqueda semántica no disponible temporalmente)."
+        })
 
 
 from django.core.files.storage import default_storage
