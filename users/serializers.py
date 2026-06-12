@@ -46,6 +46,45 @@ class RegisterSerializer(serializers.ModelSerializer):
         )
         return user
 
+class AdminUserCreateSerializer(serializers.ModelSerializer):
+    """
+    Serializador para la creación interna de usuarios por un administrador.
+    Activa al usuario automáticamente y permite capturar la contraseña para el correo.
+    """
+    password = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})
+
+    class Meta:
+        model = User
+        fields = ('username', 'email', 'password', 'first_name', 'last_name')
+
+    def validate_username(self, value):
+        if User.objects.filter(username__iexact=value).exists():
+            raise serializers.ValidationError("Ya existe un usuario con este nombre.")
+        return value
+
+    def validate_email(self, value):
+        if User.objects.filter(email__iexact=value).exists():
+            raise serializers.ValidationError("Este correo ya está en uso.")
+        return value
+
+    def validate_password(self, value):
+        if len(value) < 6:
+            raise serializers.ValidationError("La contraseña debe tener al menos 6 caracteres.")
+        return value
+
+    def create(self, validated_data):
+        raw_password = validated_data['password']
+        user = User.objects.create_user(
+            username=validated_data['username'],
+            email=validated_data['email'],
+            password=raw_password,
+            first_name=validated_data.get('first_name', ''),
+            last_name=validated_data.get('last_name', ''),
+            is_active=True
+        )
+        user._raw_password = raw_password
+        return user
+
 
 class PermissionAtomSerializer(serializers.ModelSerializer):
     class Meta:

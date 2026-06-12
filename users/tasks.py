@@ -27,6 +27,33 @@ def send_welcome_email(self, user_id):
         logger.warning(f"Error al enviar email a usuario {user_id}. Reintentando en 60 segundos...")
         raise self.retry(exc=exc)
 
+@shared_task(bind=True, max_retries=3, default_retry_delay=60)
+def send_corporate_welcome_email(self, user_id, raw_password):
+    """
+    Tarea para enviar email de bienvenida a usuarios creados internamente (is_active=True).
+    Incluye sus credenciales de acceso iniciales.
+    """
+    try:
+        user = User.objects.get(id=user_id)
+        frontend_url = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
+        send_mail(
+            subject='¡Bienvenido a tu nueva cuenta corporativa!',
+            message=f'Hola {user.first_name or user.username},\n\n'
+                    f'Un administrador ha creado una cuenta interna para ti en nuestra plataforma de Materiales.\n'
+                    f'Tu cuenta ya se encuentra activa y lista para usar.\n\n'
+                    f'Tus credenciales de acceso son:\n'
+                    f'Usuario: {user.username}\n'
+                    f'Contraseña temporal: {raw_password}\n\n'
+                    f'Puedes iniciar sesión en: {frontend_url}\n\n'
+                    f'Te recomendamos cambiar tu contraseña temporal lo antes posible.',
+            from_email='rrhh@construccion.com',
+            recipient_list=[user.email],
+            fail_silently=False,
+        )
+        logger.info(f"Email corporativo enviado con éxito al usuario {user.username}")
+    except Exception as exc:
+        logger.warning(f"Error al enviar email corporativo a usuario {user_id}. Reintentando...")
+        raise self.retry(exc=exc)
 
 @shared_task
 def revoke_expired_profiles():

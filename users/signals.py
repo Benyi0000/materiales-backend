@@ -29,8 +29,9 @@ def handle_user_registration(sender, instance, created, **kwargs):
         except Profile.DoesNotExist:
             pass
         
-        # Enviar email de bienvenida de forma asíncrona mediante Celery
-        send_welcome_email.delay(instance.id)
+        # Enviar email de bienvenida de forma asíncrona mediante Celery (Solo para registros públicos inactivos)
+        if not instance.is_active:
+            send_welcome_email.delay(instance.id)
 
 
 @receiver(post_save, sender=Subscription)

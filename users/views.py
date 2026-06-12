@@ -13,7 +13,7 @@ from django.utils.encoding import force_bytes, force_str
 from .models import PermissionAtom, Profile, ProfilePermission, UserProfileAssignment, PermissionAuditLog
 from .serializers import (
     UserSerializer, RegisterSerializer, PermissionAtomSerializer, 
-    ProfileSerializer, UserProfileAssignmentSerializer, PermissionAuditLogSerializer
+    ProfileSerializer, UserProfileAssignmentSerializer, PermissionAuditLogSerializer, AdminUserCreateSerializer
 )
 from .permissions import HasDynamicPermission
 from .tasks import send_password_reset_email
@@ -117,16 +117,23 @@ class AdminUserListView(generics.ListCreateAPIView):
     """
     queryset = User.objects.all().order_by('id')
     permission_classes = [HasDynamicPermission]
-    required_permission = 'admin.gestionar_usuarios'
-    required_scope = 'todos'
+    required_permission = ['admin.gestionar_usuarios', 'admin.alta_usuario']
+    required_scope = 'propios'
 
     def get_serializer_class(self):
         if self.request.method == 'POST':
-            return RegisterSerializer
+            return AdminUserCreateSerializer
         return UserSerializer
 
     def perform_create(self, serializer):
         user = serializer.save()
+        
+        # Enviar email corporativo de bienvenida con credenciales
+        from .tasks import send_corporate_welcome_email
+        raw_password = getattr(user, '_raw_password', '')
+        if raw_password:
+            send_corporate_welcome_email.delay(user.id, raw_password)
+
         # Asignar perfiles seleccionados en la creación (RF 6.5)
         profiles_data = self.request.data.get('profiles', [])
         for item in profiles_data:
