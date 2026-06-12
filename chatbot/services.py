@@ -36,13 +36,13 @@ class RAGQueryService:
             from catalog.models import Product
             
             words = user_text.split()
-            query = Q()
+            query_filter = Q()
             for word in words:
                 if len(word) > 2:
-                    query |= Q(name__icontains=word) | Q(description__icontains=word)
+                    query_filter |= Q(name__icontains=word) | Q(description__icontains=word)
             
-            if query:
-                products = Product.objects.filter(query)[:5]
+            if query_filter:
+                products = Product.objects.filter(query_filter)[:5]
             else:
                 products = Product.objects.all()[:5]
                 
@@ -133,24 +133,39 @@ class RAGQueryService:
             model="gemini-2.5-flash", api_key=api_key
         )
 
-        # Generar la respuesta del asistente utilizando el modelo de lenguaje
-        completed_response = ""
-        for chunk in llm.stream(messages):
-            content_piece = chunk.content
+        def generate():
+            # Generar la respuesta del asistente utilizando el modelo de lenguaje
+            completed_response = ""
+            
+            try:
+                for chunk in llm.stream(messages):
+                    content_piece = chunk.content
 
-            # Acumular la respuesta completa a medida que se reciben los fragmentos
-            if isinstance(content_piece, str):
-                completed_response += content_piece
+                    # Acumular la respuesta completa a medida que se reciben los fragmentos
+                    if isinstance(content_piece, str):
+                        completed_response += content_piece
 
-            payload = json.dumps({"response": chunk.content})
-            yield f"data: {payload}\n\n"
+                    payload = json.dumps({"response": chunk.content})
+                    yield f"data: {payload}\n\n"
+                    
+            except Exception as e:
+                # Loggear el error real en la consola del backend
+                print(f"Error en API de Gemini: {e}")
+                
+                # Si ocurre un error de API (ej. límite de cuota 429), enviarlo como respuesta amigable
+                error_msg = "\n\nLo siento, ha ocurrido un error al comunicarme con mi servidor (posiblemente la cuota de la API se agotó). Por favor, intenta de nuevo más tarde."
+                completed_response += error_msg
+                payload = json.dumps({"response": error_msg})
+                yield f"data: {payload}\n\n"
 
-        # Guardar la respuesta del asistente en la base de datos
-        ChatbotMessage.objects.create(
-            session=session, role="assistant", content=completed_response
-        )
+            # Guardar la respuesta del asistente en la base de datos
+            ChatbotMessage.objects.create(
+                session=session, role="assistant", content=completed_response
+            )
 
-        yield "data: [DONE]\n\n"
+            yield "data: [DONE]\n\n"
+
+        return generate()
 
     def _search_internet(self, user_text: str) -> str:
         try:

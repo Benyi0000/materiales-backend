@@ -14,6 +14,11 @@ class RegisterSerializer(serializers.ModelSerializer):
         fields = ('username', 'email', 'password', 'first_name', 'last_name')
 
     def validate_username(self, value):
+        import re
+        if len(value) < 4 or len(value) > 30:
+            raise serializers.ValidationError("El nombre de usuario debe tener entre 4 y 30 caracteres.")
+        if not re.match(r'^[a-zA-Z0-9._-]+$', value):
+            raise serializers.ValidationError("El nombre de usuario solo puede contener letras, números, puntos y guiones.")
         if User.objects.filter(username__iexact=value).exists():
             raise serializers.ValidationError("Ya existe un usuario con este nombre.")
         return value
@@ -58,6 +63,11 @@ class AdminUserCreateSerializer(serializers.ModelSerializer):
         fields = ('username', 'email', 'password', 'first_name', 'last_name')
 
     def validate_username(self, value):
+        import re
+        if len(value) < 4 or len(value) > 30:
+            raise serializers.ValidationError("El nombre de usuario debe tener entre 4 y 30 caracteres.")
+        if not re.match(r'^[a-zA-Z0-9._-]+$', value):
+            raise serializers.ValidationError("El nombre de usuario solo puede contener letras, números, puntos y guiones.")
         if User.objects.filter(username__iexact=value).exists():
             raise serializers.ValidationError("Ya existe un usuario con este nombre.")
         return value
