@@ -2,6 +2,7 @@ from rest_framework import status, viewsets, generics
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.throttling import AnonRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth.models import User
 from django.utils import timezone
@@ -442,8 +443,12 @@ class VerifyEmailView(APIView):
         user.save()
         return Response({"status": "Cuenta activada con éxito."}, status=status.HTTP_200_OK)
 
+class CheckRateThrottle(AnonRateThrottle):
+    rate = '15/min'
+
 class CheckUsernameView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [CheckRateThrottle]
     def get(self, request):
         username = request.query_params.get('username', '').strip()
         if not username:
@@ -453,9 +458,26 @@ class CheckUsernameView(APIView):
 
 class CheckEmailView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [CheckRateThrottle]
     def get(self, request):
         email = request.query_params.get('email', '').strip()
         if not email:
             return Response({'error': 'Se requiere el parámetro email'}, status=status.HTTP_400_BAD_REQUEST)
         exists = User.objects.filter(email__iexact=email).exists()
         return Response({'available': not exists}, status=status.HTTP_200_OK)
+
+class LogoutView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        try:
+            refresh_token = request.data.get("refresh")
+            if not refresh_token:
+                return Response({"error": "Se requiere el refresh token"}, status=status.HTTP_400_BAD_REQUEST)
+                
+            token = RefreshToken(refresh_token)
+            token.blacklist()
+            return Response({"status": "Sesión cerrada correctamente"}, status=status.HTTP_205_RESET_CONTENT)
+        except Exception as e:
+            return Response({"error": "Token inválido o expirado"}, status=status.HTTP_400_BAD_REQUEST)
+
