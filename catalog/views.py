@@ -1,9 +1,16 @@
 from rest_framework import viewsets, generics, filters
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny, IsAuthenticatedOrReadOnly
 from django_filters.rest_framework import DjangoFilterBackend
 from .models import Category, Product
 from .serializers import CategorySerializer, ProductSerializer
 from users.permissions import HasDynamicPermission
+
+class StandardResultsSetPagination(PageNumberPagination):
+    page_size = 12
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
 
 class CategoryListView(generics.ListAPIView):
     """
@@ -22,8 +29,9 @@ class ProductViewSet(viewsets.ModelViewSet):
     """
     queryset = Product.objects.all().order_by('name')
     serializer_class = ProductSerializer
+    pagination_class = StandardResultsSetPagination
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['category', 'category__slug']
+    filterset_fields = ['category', 'category__slug', 'category__name']
     search_fields = ['name', 'description', 'sku']
     ordering_fields = ['price', 'name']
 
