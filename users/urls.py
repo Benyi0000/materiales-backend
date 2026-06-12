@@ -6,7 +6,9 @@ from .views import (
     AdminUserListView, AdminUserProfilesView, AdminProfileViewSet,
     PermissionAtomListView, PermissionAuditLogListView,
     PasswordResetRequestView, PasswordResetConfirmView, VerifyEmailView,
-    CheckUsernameView, CheckEmailView, LogoutView
+    CheckUsernameView, CheckEmailView, LogoutView,
+    CustomTokenObtainPairView, ResendVerificationEmailView,
+    ChangeInitialPasswordView
 )
 
 router = DefaultRouter()
@@ -17,12 +19,14 @@ urlpatterns = [
     path('auth/check-username/', CheckUsernameView.as_view(), name='check-username'),
     path('auth/check-email/', CheckEmailView.as_view(), name='check-email'),
     path('auth/register/', RegisterView.as_view(), name='auth-register'),
-    path('auth/login/', TokenObtainPairView.as_view(), name='auth-login'),
+    path('auth/login/', CustomTokenObtainPairView.as_view(), name='auth-login'),
     path('auth/logout/', LogoutView.as_view(), name='auth-logout'),
     path('auth/token/refresh/', TokenRefreshView.as_view(), name='auth-token-refresh'),
     path('auth/verify-email/', VerifyEmailView.as_view(), name='auth-verify-email'),
+    path('auth/resend-verification/', ResendVerificationEmailView.as_view(), name='auth-resend-verification'),
     path('auth/password-reset/', PasswordResetRequestView.as_view(), name='password-reset-request'),
     path('auth/password-reset-confirm/', PasswordResetConfirmView.as_view(), name='password-reset-confirm'),
+    path('auth/change-initial-password/', ChangeInitialPasswordView.as_view(), name='change-initial-password'),
     
     # Autenticación Google OAuth 2.0
     path('auth/google/', GoogleOAuthView.as_view(), name='auth-google'),

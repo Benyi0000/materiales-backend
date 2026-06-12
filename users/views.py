@@ -13,7 +13,8 @@ from django.utils.encoding import force_bytes, force_str
 from .models import PermissionAtom, Profile, ProfilePermission, UserProfileAssignment, PermissionAuditLog
 from .serializers import (
     UserSerializer, RegisterSerializer, PermissionAtomSerializer, 
-    ProfileSerializer, UserProfileAssignmentSerializer, PermissionAuditLogSerializer, AdminUserCreateSerializer
+    ProfileSerializer, UserProfileAssignmentSerializer, PermissionAuditLogSerializer, AdminUserCreateSerializer,
+    CustomTokenObtainPairSerializer
 )
 from .permissions import HasDynamicPermission
 from .tasks import send_password_reset_email
@@ -35,6 +36,88 @@ class RegisterView(generics.CreateAPIView):
         uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
         send_verification_email.delay(user.id, token, uidb64)
 
+
+from rest_framework_simplejwt.views import TokenObtainPairView
+
+class CustomTokenObtainPairView(TokenObtainPairView):
+    serializer_class = CustomTokenObtainPairSerializer
+
+class ResendVerificationEmailView(APIView):
+    """
+    Reenvía el correo de verificación si el usuario existe y no está activo.
+    """
+    permission_classes = [AllowAny]
+    throttle_classes = [AnonRateThrottle]
+    
+    def post(self, request):
+        email = request.data.get('email')
+        if not email:
+            return Response({"error": "El correo es requerido."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        user = User.objects.filter(email__iexact=email).first()
+        if not user:
+            return Response({"status": "Si el correo existe, se envió el enlace."}, status=status.HTTP_200_OK)
+            
+        if user.is_active:
+            return Response({"error": "El correo ya está verificado."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        from django.contrib.auth.tokens import default_token_generator
+        from django.utils.http import urlsafe_base64_encode
+        from django.utils.encoding import force_bytes
+        from .tasks import send_verification_email
+        
+        token = default_token_generator.make_token(user)
+        uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
+        
+        send_verification_email.delay(user.id, token, uidb64)
+        
+        return Response({"status": "Correo reenviado."}, status=status.HTTP_200_OK)
+
+class ChangeInitialPasswordView(APIView):
+    """
+    Permite a un usuario interno cambiar su contraseña inicial usando su username/email y su contraseña actual.
+    """
+    permission_classes = [AllowAny]
+    throttle_classes = [AnonRateThrottle]
+
+    def post(self, request):
+        username = request.data.get('username')
+        old_password = request.data.get('old_password')
+        new_password = request.data.get('new_password')
+        
+        if not username or not old_password or not new_password:
+            return Response({"error": "Faltan datos requeridos."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        from django.contrib.auth.models import User
+        user = User.objects.filter(username=username).first()
+        if not user:
+            user = User.objects.filter(email=username).first()
+            
+        if not user or not user.check_password(old_password):
+            return Response({"error": "Credenciales inválidas."}, status=status.HTTP_401_UNAUTHORIZED)
+            
+        if not hasattr(user, 'force_password_change'):
+            return Response({"error": "No se requiere cambiar la contraseña inicial."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        # Validaciones de seguridad de contraseña
+        if len(new_password) < 8:
+            return Response({"error": "La contraseña debe tener al menos 8 caracteres."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        import re
+        if re.search(r'(.)\1{2,}', new_password):
+            return Response({"error": "La contraseña no puede tener 3 caracteres idénticos consecutivos."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        for i in range(len(new_password) - 2):
+            if ord(new_password[i]) == ord(new_password[i+1]) - 1 == ord(new_password[i+2]) - 2:
+                return Response({"error": "La contraseña no puede contener secuencias obvias."}, status=status.HTTP_400_BAD_REQUEST)
+            if ord(new_password[i]) == ord(new_password[i+1]) + 1 == ord(new_password[i+2]) + 2:
+                return Response({"error": "La contraseña no puede contener secuencias obvias."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        user.set_password(new_password)
+        user.save()
+        user.force_password_change.delete()
+        
+        return Response({"status": "Contraseña actualizada exitosamente."}, status=status.HTTP_200_OK)
 
 class GoogleOAuthView(APIView):
     """
@@ -394,6 +477,16 @@ class PasswordResetConfirmView(APIView):
 
         if len(new_password) < 8:
             return Response({"error": "La contraseña debe tener al menos 8 caracteres."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        import re
+        if re.search(r'(.)\1{2,}', new_password):
+            return Response({"error": "La contraseña no puede tener 3 caracteres idénticos consecutivos."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        for i in range(len(new_password) - 2):
+            if ord(new_password[i]) == ord(new_password[i+1]) - 1 == ord(new_password[i+2]) - 2:
+                return Response({"error": "La contraseña no puede contener secuencias obvias."}, status=status.HTTP_400_BAD_REQUEST)
+            if ord(new_password[i]) == ord(new_password[i+1]) + 1 == ord(new_password[i+2]) + 2:
+                return Response({"error": "La contraseña no puede contener secuencias obvias."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             uid = force_str(urlsafe_base64_decode(uidb64))
