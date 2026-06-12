@@ -1,0 +1,94 @@
+version: '3.8'
+
+# ==========================================
+# CONFIGURACIÓN DE PRODUCCIÓN - CRAFTIAR
+# ==========================================
+# Este archivo está optimizado para ejecutarse en el VPS.
+# Define la orquestación completa de la arquitectura de microservicios:
+# - Base de datos con soporte para búsquedas de IA (pgvector).
+# - Backend de Django con Gunicorn optimizado.
+# - Frontend en Next.js.
+# - Sistema de colas asíncronas con Celery, RabbitMQ y Redis.
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: craftiar_db_prod
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USER:-craftiar_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-craftiar_password}
+      POSTGRES_DB: ${DB_NAME:-craftiar_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-craftiar_user} -d ${DB_NAME:-craftiar_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: craftiar_redis_prod
+    restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: craftiar_rabbitmq_prod
+    restart: always
+
+  backend:
+    build: 
+      context: ./materiales-backend
+    container_name: craftiar_backend_prod
+    restart: always
+    command: gunicorn --bind 0.0.0.0:8000 --workers 3 config.wsgi:application
+    volumes:
+      - media_volume:/app/media
+      - static_volume:/app/static
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery_worker:
+    build:
+      context: ./materiales-backend
+    container_name: craftiar_celery_worker
+    restart: always
+    command: celery -A config worker -l info
+    volumes:
+      - media_volume:/app/media
+    env_file:
+      - .env
+    depends_on:
+      - backend
+      - redis
+
+  frontend:
+    build:
+      context: ./materiales-frontend-
+    container_name: craftiar_frontend_prod
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000/api}
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  media_volume:
+  static_volume:

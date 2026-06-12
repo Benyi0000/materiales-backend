@@ -1,4 +1,11 @@
+# ==========================================
+# DOCKERFILE - BACKEND DE DJANGO (PRODUCCIÓN/DESARROLLO)
+# ==========================================
+# Este archivo contiene las instrucciones para empaquetar el backend en un contenedor.
+# Está optimizado para entornos de producción, instalando dependencias nativas
+# (como libpq para PostgreSQL) y utilizando Gunicorn como servidor de aplicaciones.
 FROM python:3.11-slim
+
 
 WORKDIR /app
 
