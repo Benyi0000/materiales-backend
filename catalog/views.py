@@ -35,7 +35,7 @@ class ProductViewSet(viewsets.ModelViewSet):
     serializer_class = ProductSerializer
     pagination_class = StandardResultsSetPagination
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['category', 'category__slug', 'subcategories', 'subcategories__slug', 'is_active']
+    filterset_fields = ['category', 'category__slug', 'category__name', 'subcategories', 'subcategories__slug', 'is_active']
     search_fields = ['name', 'description', 'sku']
     ordering_fields = ['price', 'name']
 
