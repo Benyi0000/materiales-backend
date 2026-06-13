@@ -585,3 +585,57 @@ class LogoutView(APIView):
         except Exception as e:
             return Response({"error": "Token inválido o expirado"}, status=status.HTTP_400_BAD_REQUEST)
 
+
+class SessionEventStreamView(APIView):
+    """
+    SSE: avisa al cliente en tiempo real cuando su sesión es revocada por un
+    login más reciente (sesión única). La autenticación es por query param
+    'token' porque EventSource no permite enviar headers Authorization.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        from rest_framework_simplejwt.tokens import AccessToken
+        from rest_framework_simplejwt.exceptions import TokenError
+        from django.http import StreamingHttpResponse
+        from .session_utils import get_redis, channel_for
+
+        token_str = request.query_params.get('token')
+        if not token_str:
+            return Response({"error": "Se requiere el token."}, status=status.HTTP_401_UNAUTHORIZED)
+        try:
+            access = AccessToken(token_str)
+        except TokenError:
+            return Response({"error": "Token inválido o expirado."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        user_id = access.get('user_id')
+        my_sid = access.get('sid')
+
+        def event_stream():
+            pubsub = get_redis().pubsub()
+            pubsub.subscribe(channel_for(user_id))
+            yield "event: connected\ndata: ok\n\n"
+            try:
+                while True:
+                    message = pubsub.get_message(timeout=15.0)
+                    if message and message.get('type') == 'message':
+                        data = message['data']
+                        new_sid = data.decode() if isinstance(data, bytes) else str(data)
+                        # Si la sesión vigente ya no es la mía, mi sesión fue revocada.
+                        if new_sid != my_sid:
+                            yield "event: logout\ndata: session_revoked\n\n"
+                            break
+                    else:
+                        # keepalive para mantener viva la conexión y detectar cortes
+                        yield ": keepalive\n\n"
+            finally:
+                try:
+                    pubsub.close()
+                except Exception:
+                    pass
+
+        resp = StreamingHttpResponse(event_stream(), content_type="text/event-stream")
+        resp['Cache-Control'] = 'no-cache'
+        resp['X-Accel-Buffering'] = 'no'
+        return resp
+

@@ -8,7 +8,7 @@ from .views import (
     PasswordResetRequestView, PasswordResetConfirmView, VerifyEmailView,
     CheckUsernameView, CheckEmailView, LogoutView,
     CustomTokenObtainPairView, ResendVerificationEmailView,
-    ChangeInitialPasswordView
+    ChangeInitialPasswordView, SessionEventStreamView
 )
 
 router = DefaultRouter()
@@ -27,7 +27,10 @@ urlpatterns = [
     path('auth/password-reset/', PasswordResetRequestView.as_view(), name='password-reset-request'),
     path('auth/password-reset-confirm/', PasswordResetConfirmView.as_view(), name='password-reset-confirm'),
     path('auth/change-initial-password/', ChangeInitialPasswordView.as_view(), name='change-initial-password'),
-    
+
+    # Stream SSE de eventos de sesión (cierre en tiempo real por sesión única)
+    path('session/stream/', SessionEventStreamView.as_view(), name='session-event-stream'),
+
     # Autenticación Google OAuth 2.0
     path('auth/google/', GoogleOAuthView.as_view(), name='auth-google'),
     

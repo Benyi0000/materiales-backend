@@ -1,8 +1,10 @@
+import uuid
 from rest_framework import serializers
 from django.contrib.auth.models import User
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from .models import PermissionAtom, Profile, ProfilePermission, UserProfileAssignment, PermissionAuditLog
+from .models import PermissionAtom, Profile, ProfilePermission, UserProfileAssignment, PermissionAuditLog, ActiveSession
 from .permissions import get_user_active_permissions
+from .session_utils import publish_session_revoke
 
 class RegisterSerializer(serializers.ModelSerializer):
     """
@@ -63,6 +65,20 @@ class RegisterSerializer(serializers.ModelSerializer):
         return user
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
+    @classmethod
+    def get_token(cls, user):
+        # Sesión única: cada login genera un sid nuevo, lo fija como la sesión
+        # vigente y lo incrusta como claim (se propaga del refresh al access).
+        token = super().get_token(user)
+        session_key = uuid.uuid4().hex
+        ActiveSession.objects.update_or_create(
+            user=user, defaults={'session_key': session_key}
+        )
+        token['sid'] = session_key
+        # Notificar en tiempo real a las sesiones anteriores que fueron revocadas.
+        publish_session_revoke(user.id, session_key)
+        return token
+
     def validate(self, attrs):
         username = attrs.get(self.username_field)
         password = attrs.get('password')

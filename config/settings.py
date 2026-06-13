@@ -126,12 +126,16 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 # Configuración de Rest Framework y JWT
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        # Sesión única: valida que el claim 'sid' coincida con la sesión vigente.
+        'users.authentication.SessionAwareJWTAuthentication',
     ),
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
     ),
 }
+
+# Redis (usado para el pub/sub de revocación de sesiones en tiempo real)
+REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
 
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(days=1),

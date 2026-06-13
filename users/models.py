@@ -120,6 +120,19 @@ class PermissionAuditLog(models.Model):
         return f"{self.timestamp} - {actor} realizó {self.get_action_display()} de {self.profile.name} a {self.user.username}"
 
 
+class ActiveSession(models.Model):
+    """
+    Sesión vigente por usuario (sesión única). Guarda el identificador de la
+    sesión activa; cualquier token cuyo claim 'sid' no coincida está revocado.
+    """
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='active_session')
+    session_key = models.CharField(max_length=64)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Sesión activa de {self.user.username} ({self.session_key[:8]}…)"
+
+
 class ForcePasswordChange(models.Model):
     """
     Indica que el usuario fue creado por un administrador y debe cambiar su contraseña al iniciar sesión por primera vez.
