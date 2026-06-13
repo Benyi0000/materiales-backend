@@ -1,6 +1,7 @@
 import logging
 from rest_framework import viewsets, generics, filters, status
 from rest_framework.decorators import action
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
@@ -9,6 +10,12 @@ from .serializers import CategorySerializer, ProductSerializer
 from users.permissions import HasDynamicPermission, has_custom_permission
 
 logger = logging.getLogger('catalog.audit')
+
+class StandardResultsSetPagination(PageNumberPagination):
+    page_size = 12
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
 
 class CategoryListView(generics.ListAPIView):
     """
@@ -26,6 +33,7 @@ class ProductViewSet(viewsets.ModelViewSet):
     - Escritura protegida por permisos dinámicos y alcances (RF 1.4).
     """
     serializer_class = ProductSerializer
+    pagination_class = StandardResultsSetPagination
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['category', 'category__slug', 'subcategories', 'subcategories__slug', 'is_active']
     search_fields = ['name', 'description', 'sku']
