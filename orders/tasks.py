@@ -14,9 +14,27 @@ def send_order_confirmation_email(self, order_id):
     """
     try:
         order = Order.objects.get(id=order_id)
+
+        items_lines = "\n".join(
+            f"  - {item.quantity}x {item.product.name} (SKU: {item.product.sku}) a ${item.price_at_purchase} c/u = ${item.price_at_purchase * item.quantity}"
+            for item in order.items.select_related('product')
+        )
+
+        discount_line = ""
+        if order.discount_amount and order.discount_amount > 0:
+            coupon_code = order.coupon.code if order.coupon else ""
+            discount_line = f"\nDescuento aplicado ({coupon_code}): -${order.discount_amount}"
+
         send_mail(
             subject=f'Confirmación de Pedido #{order.id}',
-            message=f'Hola {order.user.username},\nHemos recibido el pago de tu pedido #{order.id}.\nTotal: ${order.total}\n\nGracias por comprar en la Tienda de Materiales.',
+            message=(
+                f'Hola {order.user.username},\n'
+                f'Hemos recibido tu pedido #{order.id}. Estado: Pendiente de Pago.\n\n'
+                f'Detalle:\n{items_lines}'
+                f'{discount_line}\n'
+                f'Total: ${order.total}\n\n'
+                f'Gracias por comprar en la Tienda de Materiales.'
+            ),
             from_email='orders@construccion.com',
             recipient_list=[order.user.email],
             fail_silently=False,

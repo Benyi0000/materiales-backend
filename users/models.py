@@ -111,3 +111,14 @@ class PermissionAuditLog(models.Model):
     def __str__(self):
         actor = self.performed_by.username if self.performed_by else "Sistema"
         return f"{self.timestamp} - {actor} realizó {self.get_action_display()} de {self.profile.name} a {self.user.username}"
+
+
+class ForcePasswordChange(models.Model):
+    """
+    Indica que el usuario fue creado por un administrador y debe cambiar su contraseña al iniciar sesión por primera vez.
+    """
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='force_password_change')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Debe cambiar contraseña: {self.user.username}"

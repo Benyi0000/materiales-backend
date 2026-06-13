@@ -2,6 +2,7 @@ from rest_framework import status, viewsets, generics
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.throttling import AnonRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth.models import User
 from django.utils import timezone
@@ -12,7 +13,8 @@ from django.utils.encoding import force_bytes, force_str
 from .models import PermissionAtom, Profile, ProfilePermission, UserProfileAssignment, PermissionAuditLog
 from .serializers import (
     UserSerializer, RegisterSerializer, PermissionAtomSerializer, 
-    ProfileSerializer, UserProfileAssignmentSerializer, PermissionAuditLogSerializer
+    ProfileSerializer, UserProfileAssignmentSerializer, PermissionAuditLogSerializer, AdminUserCreateSerializer,
+    CustomTokenObtainPairSerializer
 )
 from .permissions import HasDynamicPermission
 from .tasks import send_password_reset_email
@@ -20,11 +22,102 @@ from .tasks import send_password_reset_email
 class RegisterView(generics.CreateAPIView):
     """
     API para registrar nuevos usuarios.
-    Asigna automáticamente el perfil base "Comprar en la tienda".
     """
     serializer_class = RegisterSerializer
     permission_classes = [AllowAny]
 
+    def perform_create(self, serializer):
+        user = serializer.save()
+        from django.contrib.auth.tokens import default_token_generator
+        from django.utils.http import urlsafe_base64_encode
+        from django.utils.encoding import force_bytes
+        from .tasks import send_verification_email
+        token = default_token_generator.make_token(user)
+        uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
+        send_verification_email.delay(user.id, token, uidb64)
+
+
+from rest_framework_simplejwt.views import TokenObtainPairView
+
+class CustomTokenObtainPairView(TokenObtainPairView):
+    serializer_class = CustomTokenObtainPairSerializer
+
+class ResendVerificationEmailView(APIView):
+    """
+    Reenvía el correo de verificación si el usuario existe y no está activo.
+    """
+    permission_classes = [AllowAny]
+    throttle_classes = [AnonRateThrottle]
+    
+    def post(self, request):
+        email = request.data.get('email')
+        if not email:
+            return Response({"error": "El correo es requerido."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        user = User.objects.filter(email__iexact=email).first()
+        if not user:
+            return Response({"status": "Si el correo existe, se envió el enlace."}, status=status.HTTP_200_OK)
+            
+        if user.is_active:
+            return Response({"error": "El correo ya está verificado."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        from django.contrib.auth.tokens import default_token_generator
+        from django.utils.http import urlsafe_base64_encode
+        from django.utils.encoding import force_bytes
+        from .tasks import send_verification_email
+        
+        token = default_token_generator.make_token(user)
+        uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
+        
+        send_verification_email.delay(user.id, token, uidb64)
+        
+        return Response({"status": "Correo reenviado."}, status=status.HTTP_200_OK)
+
+class ChangeInitialPasswordView(APIView):
+    """
+    Permite a un usuario interno cambiar su contraseña inicial usando su username/email y su contraseña actual.
+    """
+    permission_classes = [AllowAny]
+    throttle_classes = [AnonRateThrottle]
+
+    def post(self, request):
+        username = request.data.get('username')
+        old_password = request.data.get('old_password')
+        new_password = request.data.get('new_password')
+        
+        if not username or not old_password or not new_password:
+            return Response({"error": "Faltan datos requeridos."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        from django.contrib.auth.models import User
+        user = User.objects.filter(username=username).first()
+        if not user:
+            user = User.objects.filter(email=username).first()
+            
+        if not user or not user.check_password(old_password):
+            return Response({"error": "Credenciales inválidas."}, status=status.HTTP_401_UNAUTHORIZED)
+            
+        if not hasattr(user, 'force_password_change'):
+            return Response({"error": "No se requiere cambiar la contraseña inicial."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        # Validaciones de seguridad de contraseña
+        if len(new_password) < 8:
+            return Response({"error": "La contraseña debe tener al menos 8 caracteres."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        import re
+        if re.search(r'(.)\1{2,}', new_password):
+            return Response({"error": "La contraseña no puede tener 3 caracteres idénticos consecutivos."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        for i in range(len(new_password) - 2):
+            if ord(new_password[i]) == ord(new_password[i+1]) - 1 == ord(new_password[i+2]) - 2:
+                return Response({"error": "La contraseña no puede contener secuencias obvias."}, status=status.HTTP_400_BAD_REQUEST)
+            if ord(new_password[i]) == ord(new_password[i+1]) + 1 == ord(new_password[i+2]) + 2:
+                return Response({"error": "La contraseña no puede contener secuencias obvias."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        user.set_password(new_password)
+        user.save()
+        user.force_password_change.delete()
+        
+        return Response({"status": "Contraseña actualizada exitosamente."}, status=status.HTTP_200_OK)
 
 class GoogleOAuthView(APIView):
     """
@@ -46,11 +139,19 @@ class GoogleOAuthView(APIView):
         # idinfo = id_token.verify_oauth2_token(token, requests.Request(), CLIENT_ID)
         # email = idinfo['email']
 
+        # Generar un username único case-insensitive
+        base_username = email.split('@')[0]
+        username = base_username
+        counter = 1
+        while User.objects.filter(username__iexact=username).exclude(email__iexact=email).exists():
+            username = f"{base_username}{counter}"
+            counter += 1
+
         # Buscar o crear usuario
         user, created = User.objects.get_or_create(
             email=email,
             defaults={
-                'username': email.split('@')[0], # Nombre de usuario por defecto
+                'username': username, # Nombre de usuario único
                 'first_name': first_name,
                 'last_name': last_name
             }
@@ -81,7 +182,15 @@ class UserProfileView(APIView):
 
     def get(self, request):
         serializer = UserSerializer(request.user)
-        return Response(serializer.data)
+        data = serializer.data
+        
+        # Verificar si la clave de Google API está configurada en settings o el entorno
+        from django.conf import settings
+        import os
+        api_key = getattr(settings, "GOOGLE_API_KEY", "") or os.environ.get("GOOGLE_API_KEY", "")
+        data["google_api_key_configured"] = bool(api_key)
+        
+        return Response(data)
 
 
 class AdminUserListView(generics.ListCreateAPIView):
@@ -91,16 +200,23 @@ class AdminUserListView(generics.ListCreateAPIView):
     """
     queryset = User.objects.all().order_by('id')
     permission_classes = [HasDynamicPermission]
-    required_permission = 'admin.gestionar_usuarios'
-    required_scope = 'todos'
+    required_permission = ['admin.gestionar_usuarios', 'admin.alta_usuario']
+    required_scope = 'propios'
 
     def get_serializer_class(self):
         if self.request.method == 'POST':
-            return RegisterSerializer
+            return AdminUserCreateSerializer
         return UserSerializer
 
     def perform_create(self, serializer):
         user = serializer.save()
+        
+        # Enviar email corporativo de bienvenida con credenciales
+        from .tasks import send_corporate_welcome_email
+        raw_password = getattr(user, '_raw_password', '')
+        if raw_password:
+            send_corporate_welcome_email.delay(user.id, raw_password)
+
         # Asignar perfiles seleccionados en la creación (RF 6.5)
         profiles_data = self.request.data.get('profiles', [])
         for item in profiles_data:
@@ -361,6 +477,16 @@ class PasswordResetConfirmView(APIView):
 
         if len(new_password) < 8:
             return Response({"error": "La contraseña debe tener al menos 8 caracteres."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        import re
+        if re.search(r'(.)\1{2,}', new_password):
+            return Response({"error": "La contraseña no puede tener 3 caracteres idénticos consecutivos."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        for i in range(len(new_password) - 2):
+            if ord(new_password[i]) == ord(new_password[i+1]) - 1 == ord(new_password[i+2]) - 2:
+                return Response({"error": "La contraseña no puede contener secuencias obvias."}, status=status.HTTP_400_BAD_REQUEST)
+            if ord(new_password[i]) == ord(new_password[i+1]) + 1 == ord(new_password[i+2]) + 2:
+                return Response({"error": "La contraseña no puede contener secuencias obvias."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             uid = force_str(urlsafe_base64_decode(uidb64))
@@ -375,6 +501,10 @@ class PasswordResetConfirmView(APIView):
         # Establecer la nueva contraseña
         user.set_password(new_password)
         user.save()
+        
+        from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
+        for tk in OutstandingToken.objects.filter(user=user):
+            BlacklistedToken.objects.get_or_create(token=tk)
 
         # Loguear la acción en la auditoría
         try:
@@ -391,4 +521,63 @@ class PasswordResetConfirmView(APIView):
         )
 
         return Response({"status": "Contraseña restablecida con éxito. Ya puedes iniciar sesión."}, status=status.HTTP_200_OK)
+
+
+
+class VerifyEmailView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        token = request.data.get('token')
+        uidb64 = request.data.get('uid')
+        if not token or not uidb64:
+            return Response({"error": "Faltan parámetros."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            uid = force_str(urlsafe_base64_decode(uidb64))
+            user = User.objects.get(pk=uid)
+        except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+            return Response({"error": "Enlace inválido."}, status=status.HTTP_400_BAD_REQUEST)
+        if not default_token_generator.check_token(user, token):
+            return Response({"error": "El enlace ha expirado o es inválido."}, status=status.HTTP_400_BAD_REQUEST)
+        user.is_active = True
+        user.save()
+        return Response({"status": "Cuenta activada con éxito."}, status=status.HTTP_200_OK)
+
+class CheckRateThrottle(AnonRateThrottle):
+    rate = '15/min'
+
+class CheckUsernameView(APIView):
+    permission_classes = [AllowAny]
+    throttle_classes = [CheckRateThrottle]
+    def get(self, request):
+        username = request.query_params.get('username', '').strip()
+        if not username:
+            return Response({'error': 'Se requiere el parámetro username'}, status=status.HTTP_400_BAD_REQUEST)
+        exists = User.objects.filter(username__iexact=username).exists()
+        return Response({'available': not exists}, status=status.HTTP_200_OK)
+
+class CheckEmailView(APIView):
+    permission_classes = [AllowAny]
+    throttle_classes = [CheckRateThrottle]
+    def get(self, request):
+        email = request.query_params.get('email', '').strip()
+        if not email:
+            return Response({'error': 'Se requiere el parámetro email'}, status=status.HTTP_400_BAD_REQUEST)
+        exists = User.objects.filter(email__iexact=email).exists()
+        return Response({'available': not exists}, status=status.HTTP_200_OK)
+
+class LogoutView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        try:
+            refresh_token = request.data.get("refresh")
+            if not refresh_token:
+                return Response({"error": "Se requiere el refresh token"}, status=status.HTTP_400_BAD_REQUEST)
+                
+            token = RefreshToken(refresh_token)
+            token.blacklist()
+            return Response({"status": "Sesión cerrada correctamente"}, status=status.HTTP_205_RESET_CONTENT)
+        except Exception as e:
+            return Response({"error": "Token inválido o expirado"}, status=status.HTTP_400_BAD_REQUEST)
 

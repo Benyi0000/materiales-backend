@@ -40,6 +40,8 @@ class Product(models.Model):
     weight_kg = models.DecimalField(max_digits=6, decimal_places=2, help_text="Peso en kilogramos para lógica logística")
     image_url = models.URLField(max_length=512, blank=True, null=True)
     category = models.ForeignKey(Category, on_delete=models.PROTECT, related_name='products')
+    subcategories = models.ManyToManyField(Category, related_name='multi_products', blank=True, help_text="Subcategorías a las que pertenece el producto")
+    is_active = models.BooleanField(default=True, help_text="Indica si el producto está activo para los clientes")
     technical_pdf_url = models.URLField(
         max_length=512, 
         blank=True, 
@@ -55,13 +57,13 @@ class Product(models.Model):
         help_text="Usuario que creó el producto"
     )
     
-    # Campo embedding de 384 dimensiones (HuggingFace all-MiniLM-L6-v2 o similar)
+    # Campo embedding de 768 dimensiones (Google Gemini)
     try:
         from pgvector.django import VectorField
-        embedding = VectorField(dimensions=384, null=True, blank=True)
+        embedding = VectorField(dimensions=768, null=True, blank=True)
     except ImportError:
         # Fallback de desarrollo en caso de error de importación
-        embedding = models.BinaryField(null=True, blank=True, help_text="Vectores semánticos (384 dimensiones)")
+        embedding = models.BinaryField(null=True, blank=True, help_text="Vectores semánticos (768 dimensiones)")
 
     def __str__(self):
         return f"{self.sku} - {self.name}"

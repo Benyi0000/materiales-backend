@@ -81,12 +81,15 @@ class HasDynamicPermission(permissions.BasePermission):
         if not request.user or not request.user.is_authenticated:
             return False
 
-        # Si la vista no define un permiso requerido, se asume que basta con estar autenticado
         required_permission = getattr(view, 'required_permission', None)
         if not required_permission:
             return True
 
         required_scope = getattr(view, 'required_scope', 'propios')
+        
+        if isinstance(required_permission, list):
+            return any(has_custom_permission(request.user, perm, required_scope) for perm in required_permission)
+
         return has_custom_permission(request.user, required_permission, required_scope)
 
     def has_object_permission(self, request, view, obj):
@@ -101,10 +104,19 @@ class HasDynamicPermission(permissions.BasePermission):
         if "all" in perms:
             return True
 
-        if required_permission not in perms:
+        if isinstance(required_permission, str):
+            required_permission = [required_permission]
+            
+        granted_perm = None
+        for perm in required_permission:
+            if perm in perms:
+                granted_perm = perm
+                break
+
+        if not granted_perm:
             return False
 
-        user_scope = perms[required_permission]
+        user_scope = perms[granted_perm]
         
         # Si el alcance del usuario para este permiso es 'todos', entonces puede operar sobre cualquier objeto
         if user_scope == 'todos':

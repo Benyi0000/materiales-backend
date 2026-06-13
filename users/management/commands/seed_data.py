@@ -1,7 +1,7 @@
 from django.core.management.base import BaseCommand
 from django.contrib.auth.models import User
 from django.utils.text import slugify
-from users.models import PermissionAtom, Profile, ProfilePermission
+from users.models import PermissionAtom, Profile, ProfilePermission, UserProfileAssignment
 from catalog.models import Category, Product
 from orders.models import Subscription
 
@@ -44,6 +44,9 @@ class Command(BaseCommand):
             ('gestion.exportar_reportes', 'gestion', 'Exportar reportes de pedidos/stock'),
             ('gestion.gestionar_banners', 'gestion', 'Crear y ordenar banners del home'),
             ('gestion.gestionar_promociones', 'gestion', 'Crear cupones y descuentos'),
+
+            # Marketing
+            ('marketing.gestionar_cupones', 'marketing', 'Crear y administrar cupones de descuento'),
             
             # Administración
             ('admin.gestionar_usuarios', 'admin', 'Crear, editar, activar/desactivar usuarios'),
@@ -178,9 +181,11 @@ class Command(BaseCommand):
                     'stock': stock,
                     'weight_kg': weight,
                     'category': cat,
-                    'image_url': f"https://via.placeholder.com/300?text={sku}"
+                    'image_url': f"https://placehold.co/300?text={sku}"
                 }
             )
+            if cat:
+                prod.subcategories.add(cat)
             if created:
                 self.stdout.write(f"Producto creado: {name}")
 
