@@ -1,6 +1,7 @@
 from rest_framework import status, viewsets, generics
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.renderers import BaseRenderer
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.throttling import AnonRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -586,6 +587,25 @@ class LogoutView(APIView):
             return Response({"error": "Token inválido o expirado"}, status=status.HTTP_400_BAD_REQUEST)
 
 
+class EventStreamRenderer(BaseRenderer):
+    """
+    Renderer para SSE. Necesario para que la content negotiation de DRF acepte
+    el header 'Accept: text/event-stream' que envía EventSource (sin esto, DRF
+    responde 406 Not Acceptable y la conexión SSE del navegador nunca se abre).
+    """
+    media_type = "text/event-stream"
+    format = "sse"
+    charset = "utf-8"
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        if isinstance(data, (dict, list)):
+            import json
+            return json.dumps(data).encode(self.charset)
+        if isinstance(data, str):
+            return data.encode(self.charset)
+        return data
+
+
 class SessionEventStreamView(APIView):
     """
     SSE: avisa al cliente en tiempo real cuando su sesión es revocada por un
@@ -593,6 +613,7 @@ class SessionEventStreamView(APIView):
     'token' porque EventSource no permite enviar headers Authorization.
     """
     permission_classes = [AllowAny]
+    renderer_classes = [EventStreamRenderer]
 
     def get(self, request):
         from rest_framework_simplejwt.tokens import AccessToken
