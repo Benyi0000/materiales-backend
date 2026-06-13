@@ -1,8 +1,17 @@
 import uuid
 from django.db import models
+from django.contrib.auth.models import User
 
 class ChatbotSession(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="chatbot_sessions",
+        null=True,
+        blank=True,
+        help_text="Dueño de la sesión; cada usuario solo ve sus propios chats",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     objects = models.Manager()

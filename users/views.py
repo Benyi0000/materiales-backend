@@ -397,6 +397,10 @@ class AdminProfileViewSet(viewsets.ModelViewSet):
             scope = perm_data.get('scope', 'propios')
             try:
                 perm_atom = PermissionAtom.objects.get(id=perm_id)
+                # Si el alcance no aplica a este permiso, se fija en 'todos'
+                # (evita grants "muertos" con 'propios', ej. cupones/auditoría).
+                if not perm_atom.scope_aplica:
+                    scope = 'todos'
                 ProfilePermission.objects.create(
                     profile=profile,
                     permission=perm_atom,

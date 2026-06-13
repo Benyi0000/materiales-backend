@@ -24,18 +24,30 @@ class OrderPagination(PageNumberPagination):
 
 class OrderViewSet(viewsets.ModelViewSet):
     """
-    Gestión de pedidos:
-    - Autenticado: Listar sus propios pedidos o ventas (alcance 'propios') (RF 1.4, 4.3).
-    - Vendedor/Admin (permiso 'pedidos.ver_todos'): Listar todos los pedidos (alcance 'todos').
-    - Checkout (POST): Crear pedidos desde el carrito persistente, con permiso 'carrito.checkout'.
-    - Cancelación (POST /orders/{id}/cancel/): el comprador cancela su pedido Pendiente (RN-15).
+    Gestión de pedidos (spec pedidos/ventas por permisos atómicos):
+
+    - Vista COMPRAS (?view=compras, por defecto): el cliente ve sus propias compras.
+      Requiere el permiso 'pedidos.ver'.
+    - Vista VENTAS (?view=ventas): ver las ventas del ecommerce. Requiere
+      'pedidosventas.ver'. Alcance 'propios' = ventas con sus productos;
+      alcance 'todos' = todas las ventas, con filtros por estado y rango de fechas.
+    - Cambio de estado (POST /orders/{id}/update_status/): requiere
+      'pedidosventas.cambiar_estado'; respeta la secuencia lineal (RN4).
+    - Checkout (POST): crear pedidos desde el carrito persistente ('carrito.checkout').
+    - Cancelación (POST /orders/{id}/cancel/): el comprador cancela su pedido Pendiente (RN6).
     """
     pagination_class = OrderPagination
+
+    # Acciones de detalle: el alcance/propiedad lo resuelve has_object_permission.
+    DETAIL_ACTIONS = ('retrieve', 'update_status', 'cancel')
 
     def get_serializer_class(self):
         if self.action == 'create':
             return OrderCreateSerializer
         return OrderSerializer
+
+    def _is_sales_view(self):
+        return self.request.query_params.get('view', 'compras') == 'ventas'
 
     def get_permissions(self):
         if self.action == 'create':
@@ -43,45 +55,62 @@ class OrderViewSet(viewsets.ModelViewSet):
             self.required_scope = 'propios'
             return [HasDynamicPermission()]
         elif self.action == 'update_status':
-            self.required_permission = 'pedidos.cambiar_estado'
+            self.required_permission = 'pedidosventas.cambiar_estado'
             self.required_scope = 'propios'
             return [HasDynamicPermission()]
-        elif self.action in ['list', 'retrieve']:
-            # El usuario debe poseer al menos pedidos.ver_propios o pedidos.ver_todos
-            if has_custom_permission(self.request.user, 'pedidos.ver_todos', 'propios'):
-                self.required_permission = 'pedidos.ver_todos'
-            else:
-                self.required_permission = 'pedidos.ver_propios'
+        elif self.action == 'list':
+            # La vista (compras/ventas) determina el permiso requerido (RN3).
+            self.required_permission = 'pedidosventas.ver' if self._is_sales_view() else 'pedidos.ver'
             self.required_scope = 'propios'
             return [HasDynamicPermission()]
-        
+        elif self.action == 'retrieve':
+            # Un pedido puede consultarse como compra o como venta; basta con uno.
+            self.required_permission = ['pedidos.ver', 'pedidosventas.ver']
+            self.required_scope = 'propios'
+            return [HasDynamicPermission()]
+
         return [IsAuthenticated()]
+
+    def _apply_sales_filters(self, queryset):
+        """Filtros del listado de ventas: estado y rango de fechas (RN8)."""
+        params = self.request.query_params
+        status_filter = params.get('status')
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+        date_from = params.get('date_from')
+        if date_from:
+            queryset = queryset.filter(created_at__date__gte=date_from)
+        date_to = params.get('date_to')
+        if date_to:
+            queryset = queryset.filter(created_at__date__lte=date_to)
+        return queryset
 
     def get_queryset(self):
         user = self.request.user
         if not user.is_authenticated:
             return Order.objects.none()
 
-        # Verificar si el usuario tiene permiso para ver todos los pedidos
-        if has_custom_permission(user, 'pedidos.ver_todos', required_scope='todos'):
-            queryset = Order.objects.all().order_by('-created_at')
-        # Si tiene permisos para ver propios (o ver todos con alcance propio)
-        elif has_custom_permission(user, 'pedidos.ver_propios', required_scope='propios') or has_custom_permission(user, 'pedidos.ver_todos', required_scope='propios'):
-            from django.db.models import Q
-            # Pedidos creados por él o pedidos con productos creados por él
-            queryset = Order.objects.filter(
-                Q(user=user) | Q(items__product__created_by=user)
-            ).distinct().order_by('-created_at')
+        # Acciones de detalle: devolver el universo y dejar que has_object_permission
+        # (o la verificación manual en cancel) controle el acceso por propiedad/alcance.
+        if self.action in self.DETAIL_ACTIONS:
+            return Order.objects.all()
+
+        if self._is_sales_view():
+            # Vista de VENTAS (pedidosventas.ver)
+            if has_custom_permission(user, 'pedidosventas.ver', required_scope='todos'):
+                queryset = Order.objects.all()
+            else:
+                # Alcance 'propios': solo ventas que contienen productos del usuario (RN2).
+                queryset = Order.objects.filter(items__product__created_by=user).distinct()
+            queryset = self._apply_sales_filters(queryset)
         else:
-            # Por defecto, el comprador sólo ve sus propias compras
-            queryset = Order.objects.filter(user=user).order_by('-created_at')
+            # Vista de COMPRAS (pedidos.ver): solo lo que el usuario compró (RN3).
+            queryset = Order.objects.filter(user=user)
+            status_filter = self.request.query_params.get('status')
+            if status_filter:
+                queryset = queryset.filter(status=status_filter)
 
-        # CA-10: filtro opcional por estado (?status=pending|paid|shipped|delivered|cancelled)
-        status_filter = self.request.query_params.get('status')
-        if status_filter:
-            queryset = queryset.filter(status=status_filter)
-
-        return queryset
+        return queryset.order_by('-created_at')
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data, context={'request': request})
@@ -95,26 +124,41 @@ class OrderViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], permission_classes=[HasDynamicPermission])
     def update_status(self, request, pk=None):
         """
-        RF 4.2 y RF 7.3: Permite cambiar el estado de un pedido.
-        Requiere el permiso dinámico 'pedidos.cambiar_estado'.
+        RF 4.2 y RF 7.3: Avanza el estado de un pedido respetando la secuencia
+        lineal Pendiente → En preparación → Enviado → Entregado (RN4).
+        Requiere el permiso dinámico 'pedidosventas.cambiar_estado'.
         """
-        self.required_permission = 'pedidos.cambiar_estado'
+        self.required_permission = 'pedidosventas.cambiar_estado'
         self.required_scope = 'propios'
-        
+
         order = self.get_object()
         new_status = request.data.get('status')
-        
+
         valid_statuses = [choice[0] for choice in Order.STATUS_CHOICES]
         if new_status not in valid_statuses:
             return Response(
                 {"error": f"Estado inválido. Los estados válidos son: {', '.join(valid_statuses)}"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
+        # RN4: solo se permite avanzar al estado inmediatamente siguiente.
+        expected_next = order.next_status()
+        if expected_next is None:
+            return Response(
+                {"error": f"El pedido en estado '{order.get_status_display()}' no admite más cambios de estado."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if new_status != expected_next:
+            expected_label = dict(Order.STATUS_CHOICES)[expected_next]
+            return Response(
+                {"error": f"Transición inválida. Desde '{order.get_status_display()}' solo se puede avanzar a '{expected_label}'."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         old_status = order.status
         order.status = new_status
-        order.save()
-        
+        order.save(update_fields=['status', 'updated_at'])
+
         # Disparar tarea Celery asíncrona para notificar cambio de estado por email (RF 7.3)
         send_order_status_change_email.delay(order.id, old_status, new_status)
 

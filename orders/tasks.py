@@ -52,9 +52,13 @@ def send_order_status_change_email(self, order_id, old_status, new_status):
     """
     try:
         order = Order.objects.get(id=order_id)
+        # Traducir códigos a etiquetas legibles para el cliente.
+        labels = dict(Order.STATUS_CHOICES)
+        old_label = labels.get(old_status, old_status)
+        new_label = labels.get(new_status, new_status)
         send_mail(
             subject=f'Actualización de tu Pedido #{order.id}',
-            message=f'Hola {order.user.username},\nTu pedido #{order.id} ha cambiado de estado de "{old_status}" a "{new_status}".',
+            message=f'Hola {order.user.username},\nTu pedido #{order.id} ha cambiado de estado de "{old_label}" a "{new_label}".',
             from_email='orders@construccion.com',
             recipient_list=[order.user.email],
             fail_silently=False,

@@ -138,4 +138,9 @@ class HasDynamicPermission(permissions.BasePermission):
             has_vendor_product = obj.items.filter(product__created_by=request.user).exists()
             return has_vendor_product
 
+        # Para ChatbotSession (de la app chatbot): solo el dueño de la sesión.
+        from chatbot.models import ChatbotSession
+        if isinstance(obj, ChatbotSession):
+            return obj.user == request.user
+
         return False
