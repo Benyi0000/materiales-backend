@@ -183,6 +183,10 @@ AUTHENTICATION_BACKENDS = [
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
+# Proxy inverso (Nginx con HTTPS) — necesario para que build_absolute_uri devuelva https://
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+USE_X_FORWARDED_HOST = True
+
 # Axes Config
 AXES_FAILURE_LIMIT = 5
 AXES_COOLOFF_TIME = 15 / 60
