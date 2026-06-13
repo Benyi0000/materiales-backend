@@ -86,12 +86,18 @@ class Order(models.Model):
     Pedido realizado en la tienda
     """
     STATUS_CHOICES = (
-        ('pending', 'Pendiente de Pago'),
-        ('paid', 'Pagado'),
+        ('pending', 'Pendiente'),
+        ('preparing', 'En preparación'),
         ('shipped', 'Enviado'),
         ('delivered', 'Entregado'),
         ('cancelled', 'Cancelado'),
     )
+
+    # Secuencia lineal de avance de estado (spec pedidos/ventas, RN4).
+    # Las transiciones solo avanzan al estado inmediatamente siguiente; no hay
+    # saltos ni retrocesos. 'cancelled' queda fuera de la secuencia (RN6).
+    STATUS_SEQUENCE = ['pending', 'preparing', 'shipped', 'delivered']
+
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='orders')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     total = models.DecimalField(max_digits=12, decimal_places=2)
@@ -102,6 +108,17 @@ class Order(models.Model):
 
     def __str__(self):
         return f"Pedido #{self.id} - {self.user.username} ({self.status})"
+
+    def next_status(self):
+        """
+        Retorna el estado inmediatamente siguiente en la secuencia, o None si el
+        pedido ya está en el último estado o fuera de la secuencia (ej. cancelado).
+        """
+        seq = self.STATUS_SEQUENCE
+        if self.status not in seq:
+            return None
+        idx = seq.index(self.status)
+        return seq[idx + 1] if idx + 1 < len(seq) else None
 
 
 class OrderItem(models.Model):

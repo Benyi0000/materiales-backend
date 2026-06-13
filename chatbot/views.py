@@ -1,31 +1,44 @@
 from django.http import StreamingHttpResponse
 from rest_framework import generics, status
 from rest_framework.renderers import BaseRenderer
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.core.exceptions import ObjectDoesNotExist
+from django.shortcuts import get_object_or_404
 
 from .models import ChatbotSession
 from .serializers import ChatbotSessionSerializer
 from .services import RAGQueryService
+from users.permissions import HasDynamicPermission
 
 class ChatSessionListCreateView(generics.ListCreateAPIView):
-    queryset = ChatbotSession.objects.all()
     serializer_class = ChatbotSessionSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasDynamicPermission]
+    required_permission = 'tutor.acceder'
+
+    def get_queryset(self):
+        # Cada usuario solo ve sus propias sesiones.
+        return ChatbotSession.objects.filter(user=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
 
 class ChatSessionDetailView(generics.RetrieveDestroyAPIView):
-    queryset = ChatbotSession.objects.all()
     serializer_class = ChatbotSessionSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasDynamicPermission]
+    required_permission = 'tutor.acceder'
+
+    def get_queryset(self):
+        # Solo puede ver/borrar sesiones propias (404 para ajenas).
+        return ChatbotSession.objects.filter(user=self.request.user)
 
 class ChatMessageStreamView(APIView):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.rag_service = RAGQueryService()
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasDynamicPermission]
+    required_permission = 'tutor.acceder'
 
     class ServerSentEventsRenderer(BaseRenderer):
         media_type = "text/event-stream"
@@ -50,6 +63,9 @@ class ChatMessageStreamView(APIView):
                 {"error": "El contenido del mensaje es requerido."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        # Aislamiento por usuario: solo se puede escribir en sesiones propias (404 si es ajena).
+        get_object_or_404(ChatbotSession, pk=pk, user=request.user)
 
         try:
             stream = self.rag_service.query(session_id=pk, user_text=user_text)

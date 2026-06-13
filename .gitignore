@@ -37,6 +37,14 @@ env/
 # Databases
 db.sqlite3
 *.db
+*.sqlite3
+
+# Dumps de datos / fixtures (NO versionar: pueden contener datos de producción)
+backup_*.json
+vps_*.json
+only_*.json
+products_dump.json
+images_update.json
 
 # Django media and static files collections
 media/

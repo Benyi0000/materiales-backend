@@ -10,6 +10,13 @@ class PermissionAtom(models.Model):
     code = models.CharField(max_length=100, unique=True, help_text="Formato 'modulo:accion'")
     module = models.CharField(max_length=50, help_text="Módulo del sistema al que pertenece")
     description = models.CharField(max_length=255)
+    scope_aplica = models.BooleanField(
+        default=True,
+        help_text=(
+            "Si es False, el alcance (Propios/Todos) no tiene sentido para este permiso "
+            "(recurso per-usuario o función global) y se fija en 'todos'. El panel oculta el selector."
+        ),
+    )
 
     def __str__(self):
         return f"{self.module} | {self.code}"
@@ -111,6 +118,19 @@ class PermissionAuditLog(models.Model):
     def __str__(self):
         actor = self.performed_by.username if self.performed_by else "Sistema"
         return f"{self.timestamp} - {actor} realizó {self.get_action_display()} de {self.profile.name} a {self.user.username}"
+
+
+class ActiveSession(models.Model):
+    """
+    Sesión vigente por usuario (sesión única). Guarda el identificador de la
+    sesión activa; cualquier token cuyo claim 'sid' no coincida está revocado.
+    """
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='active_session')
+    session_key = models.CharField(max_length=64)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Sesión activa de {self.user.username} ({self.session_key[:8]}…)"
 
 
 class ForcePasswordChange(models.Model):

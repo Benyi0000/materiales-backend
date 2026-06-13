@@ -1,6 +1,7 @@
 from rest_framework import status, viewsets, generics
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.renderers import BaseRenderer
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.throttling import AnonRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -397,6 +398,10 @@ class AdminProfileViewSet(viewsets.ModelViewSet):
             scope = perm_data.get('scope', 'propios')
             try:
                 perm_atom = PermissionAtom.objects.get(id=perm_id)
+                # Si el alcance no aplica a este permiso, se fija en 'todos'
+                # (evita grants "muertos" con 'propios', ej. cupones/auditoría).
+                if not perm_atom.scope_aplica:
+                    scope = 'todos'
                 ProfilePermission.objects.create(
                     profile=profile,
                     permission=perm_atom,
@@ -580,4 +585,78 @@ class LogoutView(APIView):
             return Response({"status": "Sesión cerrada correctamente"}, status=status.HTTP_205_RESET_CONTENT)
         except Exception as e:
             return Response({"error": "Token inválido o expirado"}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class EventStreamRenderer(BaseRenderer):
+    """
+    Renderer para SSE. Necesario para que la content negotiation de DRF acepte
+    el header 'Accept: text/event-stream' que envía EventSource (sin esto, DRF
+    responde 406 Not Acceptable y la conexión SSE del navegador nunca se abre).
+    """
+    media_type = "text/event-stream"
+    format = "sse"
+    charset = "utf-8"
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        if isinstance(data, (dict, list)):
+            import json
+            return json.dumps(data).encode(self.charset)
+        if isinstance(data, str):
+            return data.encode(self.charset)
+        return data
+
+
+class SessionEventStreamView(APIView):
+    """
+    SSE: avisa al cliente en tiempo real cuando su sesión es revocada por un
+    login más reciente (sesión única). La autenticación es por query param
+    'token' porque EventSource no permite enviar headers Authorization.
+    """
+    permission_classes = [AllowAny]
+    renderer_classes = [EventStreamRenderer]
+
+    def get(self, request):
+        from rest_framework_simplejwt.tokens import AccessToken
+        from rest_framework_simplejwt.exceptions import TokenError
+        from django.http import StreamingHttpResponse
+        from .session_utils import get_redis, channel_for
+
+        token_str = request.query_params.get('token')
+        if not token_str:
+            return Response({"error": "Se requiere el token."}, status=status.HTTP_401_UNAUTHORIZED)
+        try:
+            access = AccessToken(token_str)
+        except TokenError:
+            return Response({"error": "Token inválido o expirado."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        user_id = access.get('user_id')
+        my_sid = access.get('sid')
+
+        def event_stream():
+            pubsub = get_redis().pubsub()
+            pubsub.subscribe(channel_for(user_id))
+            yield "event: connected\ndata: ok\n\n"
+            try:
+                while True:
+                    message = pubsub.get_message(timeout=15.0)
+                    if message and message.get('type') == 'message':
+                        data = message['data']
+                        new_sid = data.decode() if isinstance(data, bytes) else str(data)
+                        # Si la sesión vigente ya no es la mía, mi sesión fue revocada.
+                        if new_sid != my_sid:
+                            yield "event: logout\ndata: session_revoked\n\n"
+                            break
+                    else:
+                        # keepalive para mantener viva la conexión y detectar cortes
+                        yield ": keepalive\n\n"
+            finally:
+                try:
+                    pubsub.close()
+                except Exception:
+                    pass
+
+        resp = StreamingHttpResponse(event_stream(), content_type="text/event-stream")
+        resp['Cache-Control'] = 'no-cache'
+        resp['X-Accel-Buffering'] = 'no'
+        return resp
 

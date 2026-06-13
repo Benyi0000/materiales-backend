@@ -25,11 +25,14 @@ class Command(BaseCommand):
             ('catalogo.eliminar_producto', 'catalog', 'Eliminar productos'),
             ('catalogo.gestionar_stock', 'catalog', 'Modificar stock disponible'),
             ('catalogo.ver_catalogo', 'catalog', 'Ver el catálogo navegable'),
+            ('catalogo.busqueda_semantica', 'catalog', 'Usar la búsqueda semántica (RAG) del catálogo'),
             
-            # Pedidos
-            ('pedidos.ver_propios', 'orders', 'Ver solo sus propios pedidos recibidos'),
-            ('pedidos.ver_todos', 'orders', 'Ver todos los pedidos del sistema'),
-            ('pedidos.cambiar_estado', 'orders', 'Cambiar estado de un pedido'),
+            # Pedidos (compras del cliente)
+            ('pedidos.ver', 'orders', 'Ver sus propias compras (Mis pedidos)'),
+
+            # Pedidos / Ventas (gestión de ventas del ecommerce)
+            ('pedidosventas.ver', 'ventas', 'Ver ventas (Propios: con sus productos / Todos: del sistema)'),
+            ('pedidosventas.cambiar_estado', 'ventas', 'Avanzar el estado de un pedido de venta'),
             
             # Carrito
             ('carrito.gestionar', 'cart', 'Agregar, editar y eliminar del carrito'),
@@ -50,18 +53,34 @@ class Command(BaseCommand):
             
             # Administración
             ('admin.gestionar_usuarios', 'admin', 'Crear, editar, activar/desactivar usuarios'),
+            ('admin.alta_usuario', 'admin', 'Dar de alta usuarios (permiso granular, sin baja ni modificación)'),
             ('admin.asignar_perfiles', 'admin', 'Asignar/revocar perfiles a usuarios'),
             ('admin.configurar_perfiles', 'admin', 'Crear y configurar perfiles'),
             ('admin.ver_auditoria', 'admin', 'Ver log de auditoría'),
             ('admin.configuracion_general', 'admin', 'Modificar parámetros globales del sistema'),
         ]
 
+        # Únicos permisos donde el alcance Propios/Todos cambia el comportamiento
+        # (operan sobre recursos compartidos y con dueño). El resto se fija en 'todos'.
+        SCOPE_AWARE = {
+            'catalogo.editar_producto',
+            'catalogo.eliminar_producto',
+            'catalogo.gestionar_stock',
+            'pedidosventas.ver',
+            'pedidosventas.cambiar_estado',
+        }
+
         permission_atoms = {}
         for code, module, desc in permissions_data:
+            scope_aplica = code in SCOPE_AWARE
             atom, created = PermissionAtom.objects.get_or_create(
                 code=code,
-                defaults={'module': module, 'description': desc}
+                defaults={'module': module, 'description': desc, 'scope_aplica': scope_aplica}
             )
+            # Mantener consistente el flag aunque el átomo ya existiera
+            if atom.scope_aplica != scope_aplica:
+                atom.scope_aplica = scope_aplica
+                atom.save(update_fields=['scope_aplica'])
             permission_atoms[code] = atom
             if created:
                 self.stdout.write(f"Permiso creado: {code}")
@@ -91,7 +110,7 @@ class Command(BaseCommand):
         )
         ProfilePermission.objects.get_or_create(
             profile=client_profile,
-            permission=permission_atoms['pedidos.ver_propios'],
+            permission=permission_atoms['pedidos.ver'],
             defaults={'scope': 'propios'}
         )
 
