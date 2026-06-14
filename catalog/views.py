@@ -7,6 +7,10 @@ from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.parsers import MultiPartParser, FormParser
+from django.core.files.storage import default_storage
+from django.core.files.base import ContentFile
+from django.conf import settings
 from django.db.models import F
 from .models import Category, Product, StockMovement, Banner
 from .serializers import (
@@ -54,10 +58,35 @@ class BannerViewSet(viewsets.ModelViewSet):
 
 
 class PublicBannerListView(generics.ListAPIView):
-    """Banners activos para el home (público)."""
+    """Banners activos para el catálogo público, filtrables por slot (?slot=hero|carousel)."""
     serializer_class = BannerSerializer
     permission_classes = [AllowAny]
-    queryset = Banner.objects.filter(is_active=True)
+
+    def get_queryset(self):
+        qs = Banner.objects.filter(is_active=True)
+        slot = self.request.query_params.get('slot')
+        if slot:
+            qs = qs.filter(slot=slot)
+        return qs
+
+
+class BannerImageUploadView(APIView):
+    """Sube una imagen de banner a media/banners/ y devuelve su URL. 'gestion.gestionar_banners'."""
+    permission_classes = [HasDynamicPermission]
+    required_permission = 'gestion.gestionar_banners'
+    required_scope = 'todos'
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        file_obj = request.FILES.get('image')
+        if not file_obj:
+            return Response({"error": "No se proporcionó ningún archivo de imagen."}, status=status.HTTP_400_BAD_REQUEST)
+        if not file_obj.name.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
+            return Response({"error": "Solo se permiten imágenes PNG, JPG o WEBP."}, status=status.HTTP_400_BAD_REQUEST)
+        if file_obj.size > 5 * 1024 * 1024:
+            return Response({"error": "El archivo excede el tamaño máximo de 5 MB."}, status=status.HTTP_400_BAD_REQUEST)
+        path = default_storage.save(f'banners/{file_obj.name}', ContentFile(file_obj.read()))
+        return Response({"image_url": request.build_absolute_uri(settings.MEDIA_URL + path)}, status=status.HTTP_201_CREATED)
 
 class StandardResultsSetPagination(PageNumberPagination):
     page_size = 12

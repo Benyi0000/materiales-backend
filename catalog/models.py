@@ -96,13 +96,24 @@ class StockMovement(models.Model):
 
 class Banner(models.Model):
     """
-    Banner promocional del home. Se administra desde Gestión Interna
-    (gestion.gestionar_banners) y se muestra en el home en orden si está activo.
+    Banner promocional del catálogo público. Se administra desde Gestión Interna
+    (gestion.gestionar_banners) y se muestra en su slot/ubicación si está activo.
     """
-    title = models.CharField(max_length=150, blank=True)
+    SLOT_CHOICES = (
+        ('hero', 'Hero (imagen grande arriba del catálogo)'),
+        ('carousel', 'Carrusel (franja debajo del hero)'),
+    )
+    title = models.CharField(max_length=150, blank=True, help_text="Título principal (en Hero, el encabezado grande)")
+    subtitle = models.CharField(max_length=300, blank=True, help_text="Subtítulo (solo aplica al Hero)")
     image_url = models.URLField(max_length=512)
     link = models.URLField(max_length=512, blank=True, help_text="Destino opcional al hacer clic")
-    order = models.PositiveIntegerField(default=0, help_text="Orden de aparición en el home")
+    slot = models.CharField(max_length=20, choices=SLOT_CHOICES, default='carousel',
+                            help_text="Ubicación del catálogo público donde se muestra")
+    overlay_opacity = models.PositiveIntegerField(
+        default=55,
+        help_text="Opacidad del oscurecido sobre la imagen (0-100), para legibilidad del texto en el Hero"
+    )
+    order = models.PositiveIntegerField(default=0, help_text="Orden de aparición dentro del slot")
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     CategoryListView, ProductViewSet, ProductImageUploadView,
     LowStockReportView, StockMovementListView, BannerViewSet, PublicBannerListView,
+    BannerImageUploadView,
 )
 
 router = DefaultRouter()
@@ -15,5 +16,6 @@ urlpatterns = [
     path('gestion/stock-bajo/', LowStockReportView.as_view(), name='gestion-stock-bajo'),
     path('gestion/stock-movimientos/', StockMovementListView.as_view(), name='gestion-stock-movimientos'),
     path('banners/public/', PublicBannerListView.as_view(), name='banners-public'),
+    path('banners/upload-image/', BannerImageUploadView.as_view(), name='banner-image-upload'),
     path('', include(router.urls)),
 ]
