@@ -37,6 +37,7 @@ class Product(models.Model):
     description = models.TextField()
     price = models.DecimalField(max_digits=10, decimal_places=2)
     stock = models.IntegerField(default=0)
+    min_stock = models.PositiveIntegerField(default=5, help_text="Umbral mínimo: por debajo se considera stock bajo")
     weight_kg = models.DecimalField(max_digits=6, decimal_places=2, help_text="Peso en kilogramos para lógica logística")
     image_url = models.URLField(max_length=512, blank=True, null=True)
     category = models.ForeignKey(Category, on_delete=models.PROTECT, related_name='products')
@@ -67,3 +68,47 @@ class Product(models.Model):
 
     def __str__(self):
         return f"{self.sku} - {self.name}"
+
+
+class StockMovement(models.Model):
+    """
+    Historial de movimientos de stock (se registra hacia adelante: ventas,
+    ajustes manuales, reposición). Usado por el reporte de stock bajo.
+    """
+    REASON_CHOICES = (
+        ('sale', 'Venta'),
+        ('adjust', 'Ajuste manual'),
+        ('restock', 'Reposición'),
+    )
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='stock_movements')
+    change = models.IntegerField(help_text="Variación de stock (negativa = salida, positiva = entrada)")
+    reason = models.CharField(max_length=10, choices=REASON_CHOICES)
+    resulting_stock = models.IntegerField(help_text="Stock resultante luego del movimiento")
+    user = models.ForeignKey('auth.User', on_delete=models.SET_NULL, null=True, blank=True, related_name='stock_movements')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.product.sku} {self.change:+d} ({self.get_reason_display()})"
+
+
+class Banner(models.Model):
+    """
+    Banner promocional del home. Se administra desde Gestión Interna
+    (gestion.gestionar_banners) y se muestra en el home en orden si está activo.
+    """
+    title = models.CharField(max_length=150, blank=True)
+    image_url = models.URLField(max_length=512)
+    link = models.URLField(max_length=512, blank=True, help_text="Destino opcional al hacer clic")
+    order = models.PositiveIntegerField(default=0, help_text="Orden de aparición en el home")
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['order', 'id']
+
+    def __str__(self):
+        return self.title or f"Banner #{self.id}"

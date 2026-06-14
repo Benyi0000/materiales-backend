@@ -3,28 +3,77 @@ from django.contrib.auth.models import User
 from django.utils import timezone
 from catalog.models import Product
 
+class Plan(models.Model):
+    """
+    Plan configurable por un usuario interno (gestion.gestionar_planes).
+    Otorga uno o más perfiles existentes al activarse y los revoca al
+    cancelar/vencer. Soporta prueba gratis y auto-renovación.
+    """
+    name = models.CharField(max_length=100, unique=True)
+    description = models.TextField(blank=True)
+    price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    duration_days = models.PositiveIntegerField(default=30, help_text="Duración del período en días")
+    trial_days = models.PositiveIntegerField(default=0, help_text="Días de prueba gratis al inicio (0 = sin prueba)")
+    auto_renew = models.BooleanField(default=True, help_text="Si renueva automáticamente al vencer (cobro simulado)")
+    profiles = models.ManyToManyField(
+        'users.Profile', related_name='plans', blank=True,
+        help_text="Perfiles que se asignan al usuario mientras el plan esté activo"
+    )
+    is_active = models.BooleanField(default=True, help_text="Si el plan se ofrece a los clientes")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.name} (${self.price}/{self.duration_days}d)"
+
+
 class Subscription(models.Model):
     """
-    Control de suscripción para habilitar el Tutor Visual IA de forma dinámica.
+    Suscripción de un usuario a un Plan. Habilita dinámicamente los perfiles
+    del plan; al cancelar o vencer se revocan automáticamente (sin intervención).
     """
+    # Legacy (se mantiene por compatibilidad con código existente)
     PLAN_CHOICES = (
         ('free', 'Gratuito'),
         ('premium', 'Premium (Acceso Tutor Visual IA)'),
     )
     STATUS_CHOICES = (
         ('active', 'Activa'),
+        ('trialing', 'En prueba'),
         ('cancelled', 'Cancelada'),
         ('expired', 'Expirada'),
     )
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='subscription')
     plan = models.CharField(max_length=20, choices=PLAN_CHOICES, default='free')
+    current_plan = models.ForeignKey(
+        Plan, on_delete=models.SET_NULL, null=True, blank=True, related_name='subscriptions',
+        help_text="Plan configurable vigente (nuevo sistema)"
+    )
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
+    cancel_at_period_end = models.BooleanField(default=False, help_text="Si fue cancelada y no debe renovar al vencer")
     start_date = models.DateTimeField(auto_now_add=True)
     end_date = models.DateTimeField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"{self.user.username} - {self.get_plan_display()} ({self.status})"
+        label = self.current_plan.name if self.current_plan else self.get_plan_display()
+        return f"{self.user.username} - {label} ({self.status})"
+
+
+class Payment(models.Model):
+    """
+    Registro de pago SIMULADO (sin pasarela ni cobro real, sin datos de tarjeta).
+    Sirve para historial/comprobantes del flujo de suscripción.
+    """
+    STATUS_CHOICES = (('paid_simulated', 'Pagado (simulado)'),)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='payments')
+    plan = models.ForeignKey(Plan, on_delete=models.SET_NULL, null=True, related_name='payments')
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='paid_simulated')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.user.username} - ${self.amount} ({self.plan_id}) {self.created_at:%Y-%m-%d}"
 
 
 class Coupon(models.Model):

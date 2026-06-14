@@ -45,8 +45,11 @@ class Command(BaseCommand):
             # Gestión Interna
             ('gestion.ver_dashboard', 'gestion', 'Ver métricas y reportes de ventas'),
             ('gestion.exportar_reportes', 'gestion', 'Exportar reportes de pedidos/stock'),
+            ('gestion.ver_stock_bajo', 'gestion', 'Ver reporte de stock bajo e historial de movimientos'),
             ('gestion.gestionar_banners', 'gestion', 'Crear y ordenar banners del home'),
             ('gestion.gestionar_promociones', 'gestion', 'Crear cupones y descuentos'),
+            ('gestion.gestionar_planes', 'gestion', 'Crear y configurar tipos de planes de suscripción'),
+            ('gestion.gestionar_suscripciones', 'gestion', 'Administrar suscripciones de cualquier usuario'),
 
             # Marketing
             ('marketing.gestionar_cupones', 'marketing', 'Crear y administrar cupones de descuento'),

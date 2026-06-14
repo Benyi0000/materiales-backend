@@ -415,12 +415,13 @@ class CartCouponView(APIView):
 
 class CouponViewSet(viewsets.ModelViewSet):
     """
-    ABM de cupones de descuento. Requiere permiso 'marketing.gestionar_cupones'.
+    ABM de cupones de descuento. Requiere permiso 'gestion.gestionar_promociones'
+    (antes 'marketing.gestionar_cupones', deprecado).
     """
     queryset = Coupon.objects.all().order_by('-created_at')
     serializer_class = CouponSerializer
     permission_classes = [HasDynamicPermission]
-    required_permission = 'marketing.gestionar_cupones'
+    required_permission = 'gestion.gestionar_promociones'
     required_scope = 'todos'
 
     def perform_create(self, serializer):
