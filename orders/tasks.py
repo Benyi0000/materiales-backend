@@ -35,7 +35,7 @@ def send_order_confirmation_email(self, order_id):
                 f'Total: ${order.total}\n\n'
                 f'Gracias por comprar en la Tienda de Materiales.'
             ),
-            from_email='orders@construccion.com',
+            from_email=None,  # usa DEFAULT_FROM_EMAIL (remitente verificado en Brevo)
             recipient_list=[order.user.email],
             fail_silently=False,
         )
@@ -59,7 +59,7 @@ def send_order_status_change_email(self, order_id, old_status, new_status):
         send_mail(
             subject=f'Actualización de tu Pedido #{order.id}',
             message=f'Hola {order.user.username},\nTu pedido #{order.id} ha cambiado de estado de "{old_label}" a "{new_label}".',
-            from_email='orders@construccion.com',
+            from_email=None,  # usa DEFAULT_FROM_EMAIL (remitente verificado en Brevo)
             recipient_list=[order.user.email],
             fail_silently=False,
         )
@@ -91,7 +91,7 @@ def notify_expiring_subscriptions():
         send_mail(
             subject='Tu suscripción Premium vencerá pronto',
             message=f'Hola {sub.user.username},\nTe recordamos que tu suscripción al Plan Premium de Materiales de Construcción vencerá en 3 días, el {sub.end_date.strftime("%d/%m/%Y")}.\nRenueva hoy para no perder el acceso a tu Tutor Visual IA.',
-            from_email='billing@construccion.com',
+            from_email=None,  # usa DEFAULT_FROM_EMAIL (remitente verificado en Brevo)
             recipient_list=[sub.user.email],
             fail_silently=False,
         )
