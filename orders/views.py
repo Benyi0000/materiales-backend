@@ -6,14 +6,15 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.pagination import PageNumberPagination
 from django.db import transaction
 from django.utils import timezone
-from .models import Order, Subscription, OrderItem, Coupon, Cart, CartItem
+from .models import Order, Subscription, OrderItem, Coupon, Cart, CartItem, Plan, Payment
 from .serializers import (
     OrderSerializer, OrderCreateSerializer, SubscriptionSerializer,
-    CouponSerializer, CartSerializer
+    CouponSerializer, CartSerializer, PlanSerializer, PaymentSerializer
 )
 from catalog.models import Product
 from users.permissions import HasDynamicPermission, has_custom_permission
 from .tasks import send_order_status_change_email
+from . import subscriptions as subs_service
 
 
 class OrderPagination(PageNumberPagination):
@@ -426,4 +427,108 @@ class CouponViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
+
+
+# ============================================================
+# Planes, suscripciones y pago simulado (Gestión Interna)
+# ============================================================
+
+class PlanViewSet(viewsets.ModelViewSet):
+    """
+    ABM de planes. Crear/editar/eliminar requiere 'gestion.gestionar_planes';
+    listar/ver está disponible para cualquier usuario autenticado (para suscribirse),
+    pero quienes no gestionan planes solo ven los activos.
+    """
+    serializer_class = PlanSerializer
+    required_permission = 'gestion.gestionar_planes'
+    required_scope = 'todos'
+
+    def get_permissions(self):
+        if self.action in ('list', 'retrieve'):
+            return [IsAuthenticated()]
+        return [HasDynamicPermission()]
+
+    def get_queryset(self):
+        qs = Plan.objects.all().prefetch_related('profiles').order_by('-created_at')
+        if not has_custom_permission(self.request.user, 'gestion.gestionar_planes', 'todos'):
+            qs = qs.filter(is_active=True)
+        return qs
+
+
+class SubscriptionCheckoutView(APIView):
+    """
+    Checkout SIMULADO self-service. Recibe el plan (y datos de tarjeta que se
+    ignoran); activa el plan, asigna sus perfiles y registra el pago simulado.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        plan_id = request.data.get('plan_id') or request.data.get('plan')
+        plan = Plan.objects.filter(id=plan_id, is_active=True).first()
+        if not plan:
+            return Response({"error": "Plan inválido o no disponible."}, status=status.HTTP_400_BAD_REQUEST)
+        # Pago simulado: no se valida ni guarda ningún dato de tarjeta.
+        sub = subs_service.activate_plan(request.user, plan, by=request.user)
+        return Response(SubscriptionSerializer(sub).data, status=status.HTTP_200_OK)
+
+
+class CancelMySubscriptionView(APIView):
+    """Cancela la suscripción propia (se revoca al fin del período)."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        sub = subs_service.cancel_plan(request.user, by=request.user)
+        if not sub:
+            return Response({"error": "No tenés una suscripción activa."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(SubscriptionSerializer(sub).data, status=status.HTTP_200_OK)
+
+
+class PaymentHistoryView(generics.ListAPIView):
+    """Historial de pagos simulados. Propio por defecto; admin ve todos."""
+    serializer_class = PaymentSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        qs = Payment.objects.select_related('user', 'plan').order_by('-created_at')
+        if has_custom_permission(self.request.user, 'gestion.gestionar_suscripciones', 'todos'):
+            return qs
+        return qs.filter(user=self.request.user)
+
+
+class AdminSubscriptionListView(generics.ListAPIView):
+    """Listado de todas las suscripciones. Requiere 'gestion.gestionar_suscripciones'."""
+    serializer_class = SubscriptionSerializer
+    permission_classes = [HasDynamicPermission]
+    required_permission = 'gestion.gestionar_suscripciones'
+    required_scope = 'todos'
+    queryset = Subscription.objects.select_related('user', 'current_plan').order_by('-updated_at')
+
+
+class AdminSubscriptionActionView(APIView):
+    """
+    Administrar la suscripción de un usuario (activar un plan o cancelar).
+    Requiere 'gestion.gestionar_suscripciones'.
+    """
+    permission_classes = [HasDynamicPermission]
+    required_permission = 'gestion.gestionar_suscripciones'
+    required_scope = 'todos'
+
+    def post(self, request, user_id):
+        from django.contrib.auth.models import User
+        target = User.objects.filter(id=user_id).first()
+        if not target:
+            return Response({"error": "Usuario no encontrado."}, status=status.HTTP_404_NOT_FOUND)
+        action_name = request.data.get('action')
+        if action_name == 'activate':
+            plan = Plan.objects.filter(id=request.data.get('plan_id')).first()
+            if not plan:
+                return Response({"error": "Plan inválido."}, status=status.HTTP_400_BAD_REQUEST)
+            sub = subs_service.activate_plan(target, plan, by=request.user, register_payment=False)
+        elif action_name == 'cancel':
+            sub = subs_service.cancel_plan(target, by=request.user, immediate=True)
+            if not sub:
+                return Response({"error": "El usuario no tiene suscripción."}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            return Response({"error": "action debe ser 'activate' o 'cancel'."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(SubscriptionSerializer(sub).data, status=status.HTTP_200_OK)
 

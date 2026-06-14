@@ -99,3 +99,15 @@ def notify_expiring_subscriptions():
         logger.info(f"Notificación de vencimiento de suscripción enviada a {sub.user.username}")
 
     return f"Se enviaron {count} notificaciones de vencimiento de suscripción."
+
+
+@shared_task
+def process_subscription_renewals():
+    """
+    Tarea diaria: renueva (cobro simulado) las suscripciones vencidas con
+    auto-renovación y expira+revoca las canceladas o sin auto-renovación.
+    """
+    from .subscriptions import process_renewals_and_expirations
+    renewed, expired = process_renewals_and_expirations()
+    logger.info(f"Suscripciones: {renewed} renovadas, {expired} expiradas.")
+    return f"renovadas={renewed} expiradas={expired}"
