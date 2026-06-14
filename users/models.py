@@ -5,9 +5,9 @@ from django.utils import timezone
 class PermissionAtom(models.Model):
     """
     Representa un permiso individual del sistema.
-    Ejemplo: 'banners:crear', 'promociones:gestionar'.
+    Ejemplo: 'gestion.gestionar_banners', 'gestion.gestionar_promociones'.
     """
-    code = models.CharField(max_length=100, unique=True, help_text="Formato 'modulo:accion'")
+    code = models.CharField(max_length=100, unique=True, help_text="Formato 'modulo.accion'")
     module = models.CharField(max_length=50, help_text="Módulo del sistema al que pertenece")
     description = models.CharField(max_length=255)
     scope_aplica = models.BooleanField(

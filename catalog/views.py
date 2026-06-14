@@ -138,7 +138,12 @@ class ProductViewSet(viewsets.ModelViewSet):
             changes.append(f"Precio modificado de ${old_price} a ${product.price}")
         if old_stock != product.stock:
             changes.append(f"Stock ajustado de {old_stock} a {product.stock}")
-            
+            # Registrar el movimiento de stock por ajuste manual
+            StockMovement.objects.create(
+                product=product, change=product.stock - old_stock, reason='adjust',
+                resulting_stock=product.stock, user=self.request.user,
+            )
+
         changes_str = ", ".join(changes) if changes else "Datos modificados generales"
         logger.info(f"AUDIT [Modificación]: El usuario {self.request.user.username} editó el producto SKU: {product.sku} ({product.name}). Detalle: {changes_str}.")
 

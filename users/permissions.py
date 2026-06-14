@@ -73,7 +73,7 @@ class HasDynamicPermission(permissions.BasePermission):
     
     Uso en Vista:
         permission_classes = [HasDynamicPermission]
-        required_permission = 'banners:crear'
+        required_permission = 'gestion.gestionar_banners'
         required_scope = 'todos' # opcional, por defecto 'propios'
     """
     

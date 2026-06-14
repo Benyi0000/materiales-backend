@@ -158,6 +158,19 @@ CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_ALWAYS_EAGER = os.environ.get('CELERY_TASK_ALWAYS_EAGER', str(DEBUG)).lower() == 'true'
 
+# Tareas programadas (Celery Beat)
+from celery.schedules import crontab
+CELERY_BEAT_SCHEDULE = {
+    'avisar-vencimiento-suscripciones': {
+        'task': 'orders.tasks.notify_expiring_subscriptions',
+        'schedule': crontab(hour=8, minute=0),  # diaria 08:00
+    },
+    'procesar-renovaciones-suscripciones': {
+        'task': 'orders.tasks.process_subscription_renewals',
+        'schedule': crontab(hour=0, minute=30),  # diaria 00:30
+    },
+}
+
 # Configuración de Autenticación de Google (OAuth 2.0)
 GOOGLE_OAUTH2_CLIENT_ID = os.environ.get('GOOGLE_OAUTH2_CLIENT_ID', '')
 GOOGLE_OAUTH2_CLIENT_SECRET = os.environ.get('GOOGLE_OAUTH2_CLIENT_SECRET', '')
