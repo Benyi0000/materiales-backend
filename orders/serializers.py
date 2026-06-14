@@ -193,10 +193,15 @@ class OrderCreateSerializer(serializers.Serializer):
             order = Order.objects.create(user=user, total=0, status='pending')
             subtotal = 0
 
+            from catalog.models import StockMovement
             for item in cart.items.all():
                 product = products[item.product_id]
                 product.stock -= item.quantity
                 product.save(update_fields=['stock'])
+                StockMovement.objects.create(
+                    product=product, change=-item.quantity, reason='sale',
+                    resulting_stock=product.stock, user=user,
+                )
 
                 price = product.price  # RN-12: precio vigente al checkout
                 subtotal += price * item.quantity

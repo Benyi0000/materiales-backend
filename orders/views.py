@@ -532,3 +532,97 @@ class AdminSubscriptionActionView(APIView):
             return Response({"error": "action debe ser 'activate' o 'cancel'."}, status=status.HTTP_400_BAD_REQUEST)
         return Response(SubscriptionSerializer(sub).data, status=status.HTTP_200_OK)
 
+
+# ============================================================
+# Dashboard y reportes de pedidos (Gestión Interna)
+# ============================================================
+
+def _parse_date_range(request, default_days=30):
+    from datetime import timedelta, datetime
+    today = timezone.now().date()
+    def _parse(s, fallback):
+        try:
+            return datetime.strptime(s, "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            return fallback
+    date_from = _parse(request.query_params.get('date_from'), today - timedelta(days=default_days))
+    date_to = _parse(request.query_params.get('date_to'), today)
+    return date_from, date_to
+
+
+class DashboardView(APIView):
+    """
+    Métricas de ventas. Requiere 'gestion.ver_dashboard'.
+    Ingresos = pedidos no cancelados. Top 10 por cantidad. Evolución diaria.
+    """
+    permission_classes = [HasDynamicPermission]
+    required_permission = 'gestion.ver_dashboard'
+    required_scope = 'todos'
+
+    def get(self, request):
+        from django.db.models import Sum, Count
+        from django.db.models.functions import TruncDate
+        date_from, date_to = _parse_date_range(request)
+
+        base = Order.objects.filter(created_at__date__gte=date_from, created_at__date__lte=date_to)
+        non_cancelled = base.exclude(status='cancelled')
+
+        ingresos = non_cancelled.aggregate(s=Sum('total'))['s'] or 0
+        por_estado = list(base.values('status').annotate(cantidad=Count('id')).order_by('status'))
+        top = list(
+            OrderItem.objects.filter(order__in=non_cancelled)
+            .values('product__name')
+            .annotate(cantidad=Sum('quantity'))
+            .order_by('-cantidad')[:10]
+        )
+        evolucion = list(
+            non_cancelled.annotate(dia=TruncDate('created_at'))
+            .values('dia').annotate(total=Sum('total'), pedidos=Count('id')).order_by('dia')
+        )
+        return Response({
+            'date_from': date_from, 'date_to': date_to,
+            'ingresos_totales': ingresos,
+            'pedidos_por_estado': por_estado,
+            'productos_mas_vendidos': top,
+            'evolucion_ventas': evolucion,
+        })
+
+
+class OrderReportView(APIView):
+    """
+    Reporte filtrable de pedidos (estado, rango de fechas, vendedor) con
+    exportación CSV (?export=csv). Requiere 'gestion.exportar_reportes'.
+    El 'vendedor' es el creador (created_by) de los productos del pedido.
+    """
+    permission_classes = [HasDynamicPermission]
+    required_permission = 'gestion.exportar_reportes'
+    required_scope = 'todos'
+
+    def _filtered_qs(self, request):
+        date_from, date_to = _parse_date_range(request, default_days=90)
+        qs = Order.objects.select_related('user').filter(
+            created_at__date__gte=date_from, created_at__date__lte=date_to
+        )
+        estado = request.query_params.get('status')
+        if estado:
+            qs = qs.filter(status=estado)
+        vendedor = request.query_params.get('vendedor')
+        if vendedor:
+            qs = qs.filter(items__product__created_by_id=vendedor).distinct()
+        return qs.order_by('-created_at')
+
+    def get(self, request):
+        qs = self._filtered_qs(request)
+        if request.query_params.get('export') == 'csv':
+            import csv
+            from django.http import HttpResponse
+            resp = HttpResponse(content_type='text/csv')
+            resp['Content-Disposition'] = 'attachment; filename="reporte_pedidos.csv"'
+            writer = csv.writer(resp)
+            writer.writerow(['ID', 'Cliente', 'Estado', 'Total', 'Descuento', 'Cupon', 'Fecha'])
+            for o in qs:
+                writer.writerow([o.id, o.user.username, o.get_status_display(), o.total,
+                                 o.discount_amount, o.coupon.code if o.coupon_id else '', o.created_at.strftime('%Y-%m-%d %H:%M')])
+            return resp
+        return Response(OrderSerializer(qs, many=True).data)
+

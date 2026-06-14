@@ -5,11 +5,59 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
-from .models import Category, Product
-from .serializers import CategorySerializer, ProductSerializer
+from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated
+from django.db.models import F
+from .models import Category, Product, StockMovement, Banner
+from .serializers import (
+    CategorySerializer, ProductSerializer, StockMovementSerializer,
+    LowStockProductSerializer, BannerSerializer,
+)
 from users.permissions import HasDynamicPermission, has_custom_permission
 
 logger = logging.getLogger('catalog.audit')
+
+
+class LowStockReportView(APIView):
+    """Productos con stock por debajo del umbral. Requiere 'gestion.ver_stock_bajo'."""
+    permission_classes = [HasDynamicPermission]
+    required_permission = 'gestion.ver_stock_bajo'
+    required_scope = 'todos'
+
+    def get(self, request):
+        qs = Product.objects.filter(stock__lt=F('min_stock')).select_related('category').order_by('stock')
+        return Response(LowStockProductSerializer(qs, many=True).data)
+
+
+class StockMovementListView(generics.ListAPIView):
+    """Historial de movimientos de stock (filtrable por producto). 'gestion.ver_stock_bajo'."""
+    serializer_class = StockMovementSerializer
+    permission_classes = [HasDynamicPermission]
+    required_permission = 'gestion.ver_stock_bajo'
+    required_scope = 'todos'
+
+    def get_queryset(self):
+        qs = StockMovement.objects.select_related('product', 'user').all()
+        product_id = self.request.query_params.get('product')
+        if product_id:
+            qs = qs.filter(product_id=product_id)
+        return qs
+
+
+class BannerViewSet(viewsets.ModelViewSet):
+    """ABM de banners del home. Requiere 'gestion.gestionar_banners'."""
+    queryset = Banner.objects.all()
+    serializer_class = BannerSerializer
+    permission_classes = [HasDynamicPermission]
+    required_permission = 'gestion.gestionar_banners'
+    required_scope = 'todos'
+
+
+class PublicBannerListView(generics.ListAPIView):
+    """Banners activos para el home (público)."""
+    serializer_class = BannerSerializer
+    permission_classes = [AllowAny]
+    queryset = Banner.objects.filter(is_active=True)
 
 class StandardResultsSetPagination(PageNumberPagination):
     page_size = 12
