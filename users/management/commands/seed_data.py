@@ -117,6 +117,16 @@ class Command(BaseCommand):
             permission=permission_atoms['pedidos.ver'],
             defaults={'scope': 'propios'}
         )
+        ProfilePermission.objects.get_or_create(
+            profile=client_profile,
+            permission=permission_atoms['suscripciones.ver'],
+            defaults={'scope': 'todos'}
+        )
+        ProfilePermission.objects.get_or_create(
+            profile=client_profile,
+            permission=permission_atoms['suscripciones.suscribirse'],
+            defaults={'scope': 'todos'}
+        )
 
         # Perfil 5: Administrador General
         admin_profile, _ = Profile.objects.get_or_create(
