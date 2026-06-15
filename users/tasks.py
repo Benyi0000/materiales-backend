@@ -18,7 +18,7 @@ def send_welcome_email(self, user_id):
         send_mail(
             subject='¡Bienvenido a Tienda de Materiales!',
             message=f'Hola {user.username}, gracias por registrarte en nuestra plataforma de materiales de construcción.',
-            from_email='no-reply@construccion.com',
+            from_email=None,  # usa DEFAULT_FROM_EMAIL (remitente verificado en Brevo)
             recipient_list=[user.email],
             fail_silently=False,
         )
@@ -46,7 +46,7 @@ def send_corporate_welcome_email(self, user_id, raw_password):
                     f'Contraseña temporal: {raw_password}\n\n'
                     f'Puedes iniciar sesión en: {frontend_url}\n\n'
                     f'Te recomendamos cambiar tu contraseña temporal lo antes posible.',
-            from_email='rrhh@construccion.com',
+            from_email=None,  # usa DEFAULT_FROM_EMAIL (remitente verificado en Brevo)
             recipient_list=[user.email],
             fail_silently=False,
         )
@@ -99,7 +99,7 @@ def send_password_reset_email(self, user_id, token, uidb64):
         send_mail(
             subject='Restablecer tu Contraseña - Materiales Inteligentes',
             message=f'Hola {user.username},\nHemos recibido una solicitud para restablecer tu contraseña. Haz clic en el siguiente enlace para definir tu nueva contraseña. Este enlace expira en 15 minutos:\n\n{reset_link}\n\nSi no realizaste esta solicitud, puedes ignorar este correo.',
-            from_email='security@construccion.com',
+            from_email=None,  # usa DEFAULT_FROM_EMAIL (remitente verificado en Brevo)
             recipient_list=[user.email],
             fail_silently=False,
         )
@@ -115,7 +115,8 @@ def send_verification_email(user_id, token, uid):
     from django.conf import settings
     try:
         user = User.objects.get(id=user_id)
-        verification_url = f'http://localhost:3000/auth/verify?uid={uid}&token={token}'
+        frontend_url = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
+        verification_url = f'{frontend_url}/auth/verify?uid={uid}&token={token}'
         subject = 'Verifica tu cuenta'
         message = f'Hola {user.username},\n\nPor favor, verifica tu cuenta haciendo clic en el siguiente enlace:\n{verification_url}'
         send_mail(

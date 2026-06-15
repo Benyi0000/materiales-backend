@@ -5,11 +5,88 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
-from .models import Category, Product
-from .serializers import CategorySerializer, ProductSerializer
+from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.parsers import MultiPartParser, FormParser
+from django.core.files.storage import default_storage
+from django.core.files.base import ContentFile
+from django.conf import settings
+from django.db.models import F
+from .models import Category, Product, StockMovement, Banner
+from .serializers import (
+    CategorySerializer, ProductSerializer, StockMovementSerializer,
+    LowStockProductSerializer, BannerSerializer,
+)
 from users.permissions import HasDynamicPermission, has_custom_permission
 
 logger = logging.getLogger('catalog.audit')
+
+
+class LowStockReportView(APIView):
+    """Productos con stock por debajo del umbral. Requiere 'gestion.ver_stock_bajo'."""
+    permission_classes = [HasDynamicPermission]
+    required_permission = 'gestion.ver_stock_bajo'
+    required_scope = 'todos'
+
+    def get(self, request):
+        qs = Product.objects.filter(stock__lt=F('min_stock')).select_related('category').order_by('stock')
+        return Response(LowStockProductSerializer(qs, many=True).data)
+
+
+class StockMovementListView(generics.ListAPIView):
+    """Historial de movimientos de stock (filtrable por producto). 'gestion.ver_stock_bajo'."""
+    serializer_class = StockMovementSerializer
+    permission_classes = [HasDynamicPermission]
+    required_permission = 'gestion.ver_stock_bajo'
+    required_scope = 'todos'
+
+    def get_queryset(self):
+        qs = StockMovement.objects.select_related('product', 'user').all()
+        product_id = self.request.query_params.get('product')
+        if product_id:
+            qs = qs.filter(product_id=product_id)
+        return qs
+
+
+class BannerViewSet(viewsets.ModelViewSet):
+    """ABM de banners del home. Requiere 'gestion.gestionar_banners'."""
+    queryset = Banner.objects.all()
+    serializer_class = BannerSerializer
+    permission_classes = [HasDynamicPermission]
+    required_permission = 'gestion.gestionar_banners'
+    required_scope = 'todos'
+
+
+class PublicBannerListView(generics.ListAPIView):
+    """Banners activos para el catálogo público, filtrables por slot (?slot=hero|carousel)."""
+    serializer_class = BannerSerializer
+    permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        qs = Banner.objects.filter(is_active=True)
+        slot = self.request.query_params.get('slot')
+        if slot:
+            qs = qs.filter(slot=slot)
+        return qs
+
+
+class BannerImageUploadView(APIView):
+    """Sube una imagen de banner a media/banners/ y devuelve su URL. 'gestion.gestionar_banners'."""
+    permission_classes = [HasDynamicPermission]
+    required_permission = 'gestion.gestionar_banners'
+    required_scope = 'todos'
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        file_obj = request.FILES.get('image')
+        if not file_obj:
+            return Response({"error": "No se proporcionó ningún archivo de imagen."}, status=status.HTTP_400_BAD_REQUEST)
+        if not file_obj.name.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
+            return Response({"error": "Solo se permiten imágenes PNG, JPG o WEBP."}, status=status.HTTP_400_BAD_REQUEST)
+        if file_obj.size > 5 * 1024 * 1024:
+            return Response({"error": "El archivo excede el tamaño máximo de 5 MB."}, status=status.HTTP_400_BAD_REQUEST)
+        path = default_storage.save(f'banners/{file_obj.name}', ContentFile(file_obj.read()))
+        return Response({"image_url": request.build_absolute_uri(settings.MEDIA_URL + path)}, status=status.HTTP_201_CREATED)
 
 class StandardResultsSetPagination(PageNumberPagination):
     page_size = 12
@@ -90,7 +167,12 @@ class ProductViewSet(viewsets.ModelViewSet):
             changes.append(f"Precio modificado de ${old_price} a ${product.price}")
         if old_stock != product.stock:
             changes.append(f"Stock ajustado de {old_stock} a {product.stock}")
-            
+            # Registrar el movimiento de stock por ajuste manual
+            StockMovement.objects.create(
+                product=product, change=product.stock - old_stock, reason='adjust',
+                resulting_stock=product.stock, user=self.request.user,
+            )
+
         changes_str = ", ".join(changes) if changes else "Datos modificados generales"
         logger.info(f"AUDIT [Modificación]: El usuario {self.request.user.username} editó el producto SKU: {product.sku} ({product.name}). Detalle: {changes_str}.")
 

@@ -97,6 +97,13 @@ else:
     }
     print("Base de datos: Usando SQLite local (fallback de desarrollo).")
 
+# Argon2 como algoritmo primario; PBKDF2 como fallback para rehashear
+# contraseñas existentes en el próximo login (migración transparente).
+PASSWORD_HASHERS = [
+    'django.contrib.auth.hashers.Argon2PasswordHasher',
+    'django.contrib.auth.hashers.PBKDF2PasswordHasher',
+]
+
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
     {
@@ -158,6 +165,23 @@ CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_ALWAYS_EAGER = os.environ.get('CELERY_TASK_ALWAYS_EAGER', str(DEBUG)).lower() == 'true'
 
+# Tareas programadas (Celery Beat)
+from celery.schedules import crontab
+CELERY_BEAT_SCHEDULE = {
+    'avisar-vencimiento-suscripciones': {
+        'task': 'orders.tasks.notify_expiring_subscriptions',
+        'schedule': crontab(hour=8, minute=0),    # diaria 08:00
+    },
+    'procesar-renovaciones-suscripciones': {
+        'task': 'orders.tasks.process_subscription_renewals',
+        'schedule': crontab(hour=0, minute=30),   # diaria 00:30
+    },
+    'revocar-perfiles-vencidos': {
+        'task': 'users.tasks.revoke_expired_profiles',
+        'schedule': crontab(hour=1, minute=0),    # diaria 01:00
+    },
+}
+
 # Configuración de Autenticación de Google (OAuth 2.0)
 GOOGLE_OAUTH2_CLIENT_ID = os.environ.get('GOOGLE_OAUTH2_CLIENT_ID', '')
 GOOGLE_OAUTH2_CLIENT_SECRET = os.environ.get('GOOGLE_OAUTH2_CLIENT_SECRET', '')
@@ -169,13 +193,18 @@ HUGGINGFACE_API_KEY = os.environ.get('HUGGINGFACE_API_KEY', '')
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+# Envío de mails — Brevo (SMTP relay). En prod, configurar en .env:
+#   EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
+#   EMAIL_HOST=smtp-relay.brevo.com  ·  EMAIL_PORT=587  ·  EMAIL_USE_TLS=True
+#   EMAIL_HOST_USER=<login SMTP de Brevo>  ·  EMAIL_HOST_PASSWORD=<SMTP key>
+#   DEFAULT_FROM_EMAIL debe ser un remitente verificado en Brevo.
 EMAIL_BACKEND = os.environ.get('EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend')
-EMAIL_HOST = os.environ.get('EMAIL_HOST', 'smtp.gmail.com')
+EMAIL_HOST = os.environ.get('EMAIL_HOST', 'smtp-relay.brevo.com')
 EMAIL_PORT = int(os.environ.get('EMAIL_PORT', 587))
 EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'True').lower() == 'true'
 EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
-DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'CraftIAr <no-reply@craftiar.com>')
+DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'CraftIAr <no-reply@craftiar.me>')
 
 AUTHENTICATION_BACKENDS = [
     'axes.backends.AxesStandaloneBackend',

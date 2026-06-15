@@ -6,14 +6,15 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.pagination import PageNumberPagination
 from django.db import transaction
 from django.utils import timezone
-from .models import Order, Subscription, OrderItem, Coupon, Cart, CartItem
+from .models import Order, Subscription, OrderItem, Coupon, Cart, CartItem, Plan, Payment
 from .serializers import (
     OrderSerializer, OrderCreateSerializer, SubscriptionSerializer,
-    CouponSerializer, CartSerializer
+    CouponSerializer, CartSerializer, PlanSerializer, PaymentSerializer
 )
 from catalog.models import Product
 from users.permissions import HasDynamicPermission, has_custom_permission
 from .tasks import send_order_status_change_email
+from . import subscriptions as subs_service
 
 
 class OrderPagination(PageNumberPagination):
@@ -215,6 +216,22 @@ class SubscriptionView(generics.RetrieveUpdateDestroyAPIView):
             user=self.request.user,
             defaults={'plan': 'free', 'status': 'active'}
         )
+        # Self-heal: si el plan otorgaba perfiles y al usuario ya no le queda
+        # ninguno asignado (ej. se lo revocaron desde Gestión de Perfiles),
+        # entonces ya no está suscripto.
+        if subscription.current_plan_id:
+            from users.models import UserProfileAssignment
+            profile_ids = list(subscription.current_plan.profiles.values_list('id', flat=True))
+            if profile_ids:
+                still = UserProfileAssignment.objects.filter(
+                    user=self.request.user, profile_id__in=profile_ids, is_active=True
+                ).exists()
+                if not still:
+                    subscription.current_plan = None
+                    subscription.status = 'expired'
+                    subscription.cancel_at_period_end = True
+                    subscription.plan = 'free'
+                    subscription.save(update_fields=['current_plan', 'status', 'cancel_at_period_end', 'plan'])
         return subscription
 
     def post(self, request):
@@ -415,14 +432,217 @@ class CartCouponView(APIView):
 
 class CouponViewSet(viewsets.ModelViewSet):
     """
-    ABM de cupones de descuento. Requiere permiso 'marketing.gestionar_cupones'.
+    ABM de cupones de descuento. Requiere permiso 'gestion.gestionar_promociones'
+    (antes 'marketing.gestionar_cupones', deprecado).
     """
     queryset = Coupon.objects.all().order_by('-created_at')
     serializer_class = CouponSerializer
     permission_classes = [HasDynamicPermission]
-    required_permission = 'marketing.gestionar_cupones'
+    required_permission = 'gestion.gestionar_promociones'
     required_scope = 'todos'
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
+
+
+# ============================================================
+# Planes, suscripciones y pago simulado (Gestión Interna)
+# ============================================================
+
+class PlanViewSet(viewsets.ModelViewSet):
+    """
+    ABM de planes. Crear/editar/eliminar requiere 'gestion.gestionar_planes';
+    listar/ver está disponible para cualquier usuario autenticado (para suscribirse),
+    pero quienes no gestionan planes solo ven los activos.
+    """
+    serializer_class = PlanSerializer
+    required_permission = 'gestion.gestionar_planes'
+    required_scope = 'todos'
+
+    def get_permissions(self):
+        if self.action in ('list', 'retrieve'):
+            return [IsAuthenticated()]
+        return [HasDynamicPermission()]
+
+    def get_queryset(self):
+        qs = Plan.objects.all().prefetch_related('profiles').order_by('-created_at')
+        if not has_custom_permission(self.request.user, 'gestion.gestionar_planes', 'todos'):
+            qs = qs.filter(is_active=True)
+        return qs
+
+
+class SubscriptionCheckoutView(APIView):
+    """
+    Checkout SIMULADO self-service. Recibe el plan (y datos de tarjeta que se
+    ignoran); activa el plan, asigna sus perfiles y registra el pago simulado.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if not has_custom_permission(request.user, 'suscripciones.suscribirse', 'todos'):
+            return Response({"error": "No tenés permiso para suscribirte."}, status=status.HTTP_403_FORBIDDEN)
+        plan_id = request.data.get('plan_id') or request.data.get('plan')
+        plan = Plan.objects.filter(id=plan_id, is_active=True).first()
+        if not plan:
+            return Response({"error": "Plan inválido o no disponible."}, status=status.HTTP_400_BAD_REQUEST)
+        # Pago simulado: no se valida ni guarda ningún dato de tarjeta.
+        sub = subs_service.activate_plan(request.user, plan, by=request.user)
+        return Response(SubscriptionSerializer(sub).data, status=status.HTTP_200_OK)
+
+
+class CancelMySubscriptionView(APIView):
+    """Cancela la suscripción propia (se revoca al fin del período)."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if not has_custom_permission(request.user, 'suscripciones.suscribirse', 'todos'):
+            return Response({"error": "No tenés permiso para gestionar tu suscripción."}, status=status.HTTP_403_FORBIDDEN)
+        sub = subs_service.cancel_plan(request.user, by=request.user)
+        if not sub:
+            return Response({"error": "No tenés una suscripción activa."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(SubscriptionSerializer(sub).data, status=status.HTTP_200_OK)
+
+
+class PaymentHistoryView(generics.ListAPIView):
+    """Historial de pagos simulados. Propio por defecto; admin ve todos."""
+    serializer_class = PaymentSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        qs = Payment.objects.select_related('user', 'plan').order_by('-created_at')
+        if has_custom_permission(self.request.user, 'gestion.gestionar_suscripciones', 'todos'):
+            return qs
+        return qs.filter(user=self.request.user)
+
+
+class AdminSubscriptionListView(generics.ListAPIView):
+    """Listado de todas las suscripciones. Requiere 'gestion.gestionar_suscripciones'."""
+    serializer_class = SubscriptionSerializer
+    permission_classes = [HasDynamicPermission]
+    required_permission = 'gestion.gestionar_suscripciones'
+    required_scope = 'todos'
+    queryset = Subscription.objects.select_related('user', 'current_plan').order_by('-updated_at')
+
+
+class AdminSubscriptionActionView(APIView):
+    """
+    Administrar la suscripción de un usuario (activar un plan o cancelar).
+    Requiere 'gestion.gestionar_suscripciones'.
+    """
+    permission_classes = [HasDynamicPermission]
+    required_permission = 'gestion.gestionar_suscripciones'
+    required_scope = 'todos'
+
+    def post(self, request, user_id):
+        from django.contrib.auth.models import User
+        target = User.objects.filter(id=user_id).first()
+        if not target:
+            return Response({"error": "Usuario no encontrado."}, status=status.HTTP_404_NOT_FOUND)
+        action_name = request.data.get('action')
+        if action_name == 'activate':
+            plan = Plan.objects.filter(id=request.data.get('plan_id')).first()
+            if not plan:
+                return Response({"error": "Plan inválido."}, status=status.HTTP_400_BAD_REQUEST)
+            sub = subs_service.activate_plan(target, plan, by=request.user, register_payment=False)
+        elif action_name == 'cancel':
+            sub = subs_service.cancel_plan(target, by=request.user, immediate=True)
+            if not sub:
+                return Response({"error": "El usuario no tiene suscripción."}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            return Response({"error": "action debe ser 'activate' o 'cancel'."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(SubscriptionSerializer(sub).data, status=status.HTTP_200_OK)
+
+
+# ============================================================
+# Dashboard y reportes de pedidos (Gestión Interna)
+# ============================================================
+
+def _parse_date_range(request, default_days=30):
+    from datetime import timedelta, datetime
+    today = timezone.now().date()
+    def _parse(s, fallback):
+        try:
+            return datetime.strptime(s, "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            return fallback
+    date_from = _parse(request.query_params.get('date_from'), today - timedelta(days=default_days))
+    date_to = _parse(request.query_params.get('date_to'), today)
+    return date_from, date_to
+
+
+class DashboardView(APIView):
+    """
+    Métricas de ventas. Requiere 'gestion.ver_dashboard'.
+    Ingresos = pedidos no cancelados. Top 10 por cantidad. Evolución diaria.
+    """
+    permission_classes = [HasDynamicPermission]
+    required_permission = 'gestion.ver_dashboard'
+    required_scope = 'todos'
+
+    def get(self, request):
+        from django.db.models import Sum, Count
+        from django.db.models.functions import TruncDate
+        date_from, date_to = _parse_date_range(request)
+
+        base = Order.objects.filter(created_at__date__gte=date_from, created_at__date__lte=date_to)
+        non_cancelled = base.exclude(status='cancelled')
+
+        ingresos = non_cancelled.aggregate(s=Sum('total'))['s'] or 0
+        por_estado = list(base.values('status').annotate(cantidad=Count('id')).order_by('status'))
+        top = list(
+            OrderItem.objects.filter(order__in=non_cancelled)
+            .values('product__name')
+            .annotate(cantidad=Sum('quantity'))
+            .order_by('-cantidad')[:10]
+        )
+        evolucion = list(
+            non_cancelled.annotate(dia=TruncDate('created_at'))
+            .values('dia').annotate(total=Sum('total'), pedidos=Count('id')).order_by('dia')
+        )
+        return Response({
+            'date_from': date_from, 'date_to': date_to,
+            'ingresos_totales': ingresos,
+            'pedidos_por_estado': por_estado,
+            'productos_mas_vendidos': top,
+            'evolucion_ventas': evolucion,
+        })
+
+
+class OrderReportView(APIView):
+    """
+    Reporte filtrable de pedidos (estado, rango de fechas, vendedor) con
+    exportación CSV (?export=csv). Requiere 'gestion.exportar_reportes'.
+    El 'vendedor' es el creador (created_by) de los productos del pedido.
+    """
+    permission_classes = [HasDynamicPermission]
+    required_permission = 'gestion.exportar_reportes'
+    required_scope = 'todos'
+
+    def _filtered_qs(self, request):
+        date_from, date_to = _parse_date_range(request, default_days=90)
+        qs = Order.objects.select_related('user').filter(
+            created_at__date__gte=date_from, created_at__date__lte=date_to
+        )
+        estado = request.query_params.get('status')
+        if estado:
+            qs = qs.filter(status=estado)
+        vendedor = request.query_params.get('vendedor')
+        if vendedor:
+            qs = qs.filter(items__product__created_by_id=vendedor).distinct()
+        return qs.order_by('-created_at')
+
+    def get(self, request):
+        qs = self._filtered_qs(request)
+        if request.query_params.get('export') == 'csv':
+            import csv
+            from django.http import HttpResponse
+            resp = HttpResponse(content_type='text/csv')
+            resp['Content-Disposition'] = 'attachment; filename="reporte_pedidos.csv"'
+            writer = csv.writer(resp)
+            writer.writerow(['ID', 'Cliente', 'Estado', 'Total', 'Descuento', 'Cupon', 'Fecha'])
+            for o in qs:
+                writer.writerow([o.id, o.user.username, o.get_status_display(), o.total,
+                                 o.discount_amount, o.coupon.code if o.coupon_id else '', o.created_at.strftime('%Y-%m-%d %H:%M')])
+            return resp
+        return Response(OrderSerializer(qs, many=True).data)
 

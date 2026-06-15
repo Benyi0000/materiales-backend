@@ -1,15 +1,41 @@
 from rest_framework import serializers
 from django.db import transaction
-from .models import Subscription, Order, OrderItem, Coupon, CouponRedemption, Cart, CartItem
+from .models import Subscription, Order, OrderItem, Coupon, CouponRedemption, Cart, CartItem, Plan, Payment
 from catalog.models import Product
+from users.models import Profile
 from .tasks import send_order_confirmation_email
+
+class PlanSerializer(serializers.ModelSerializer):
+    profiles = serializers.PrimaryKeyRelatedField(many=True, queryset=Profile.objects.all(), required=False)
+    profile_names = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Plan
+        fields = ('id', 'name', 'description', 'price', 'duration_days', 'trial_days',
+                  'auto_renew', 'profiles', 'profile_names', 'is_active', 'created_at')
+        read_only_fields = ('created_at',)
+
+    def get_profile_names(self, obj):
+        return [p.name for p in obj.profiles.all()]
+
+
+class PaymentSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source='user.username', read_only=True)
+    plan_name = serializers.CharField(source='plan.name', read_only=True, default=None)
+
+    class Meta:
+        model = Payment
+        fields = ('id', 'username', 'plan_name', 'amount', 'status', 'created_at')
+
 
 class SubscriptionSerializer(serializers.ModelSerializer):
     username = serializers.CharField(source='user.username', read_only=True)
+    current_plan_name = serializers.CharField(source='current_plan.name', read_only=True, default=None)
 
     class Meta:
         model = Subscription
-        fields = ('id', 'username', 'plan', 'status', 'start_date', 'end_date')
+        fields = ('id', 'username', 'plan', 'current_plan', 'current_plan_name', 'status',
+                  'cancel_at_period_end', 'start_date', 'end_date')
 
 
 class OrderItemSerializer(serializers.ModelSerializer):
@@ -167,10 +193,15 @@ class OrderCreateSerializer(serializers.Serializer):
             order = Order.objects.create(user=user, total=0, status='pending')
             subtotal = 0
 
+            from catalog.models import StockMovement
             for item in cart.items.all():
                 product = products[item.product_id]
                 product.stock -= item.quantity
                 product.save(update_fields=['stock'])
+                StockMovement.objects.create(
+                    product=product, change=-item.quantity, reason='sale',
+                    resulting_stock=product.stock, user=user,
+                )
 
                 price = product.price  # RN-12: precio vigente al checkout
                 subtotal += price * item.quantity

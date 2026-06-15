@@ -48,7 +48,7 @@ services:
       context: ./materiales-backend
     container_name: craftiar_backend_prod
     restart: always
-    command: gunicorn --bind 0.0.0.0:8000 --workers 3 config.wsgi:application
+    command: gunicorn --bind 0.0.0.0:8000 --worker-class gevent --worker-connections 1000 --workers 3 config.wsgi:application
     volumes:
       - media_volume:/app/media
       - static_volume:/app/static

@@ -41,16 +41,20 @@ class Command(BaseCommand):
             # Tutor IA
             ('tutor.acceder', 'tutor', 'Acceder al Tutor Visual IA'),
             ('tutor.ver_historial', 'tutor', 'Ver historial de proyectos'),
-            
+
+            # Suscripciones (cliente)
+            ('suscripciones.ver', 'suscripciones', 'Ver planes y la sección Mis suscripciones'),
+            ('suscripciones.suscribirse', 'suscripciones', 'Contratar y cancelar planes de suscripción'),
+
             # Gestión Interna
             ('gestion.ver_dashboard', 'gestion', 'Ver métricas y reportes de ventas'),
-            ('gestion.exportar_reportes', 'gestion', 'Exportar reportes de pedidos/stock'),
+            ('gestion.exportar_reportes', 'gestion', 'Acceder y exportar (CSV) el reporte de pedidos'),
+            ('gestion.ver_stock_bajo', 'gestion', 'Ver reporte de stock bajo e historial de movimientos'),
             ('gestion.gestionar_banners', 'gestion', 'Crear y ordenar banners del home'),
             ('gestion.gestionar_promociones', 'gestion', 'Crear cupones y descuentos'),
+            ('gestion.gestionar_planes', 'gestion', 'Crear y configurar tipos de planes de suscripción'),
+            ('gestion.gestionar_suscripciones', 'gestion', 'Administrar suscripciones de cualquier usuario'),
 
-            # Marketing
-            ('marketing.gestionar_cupones', 'marketing', 'Crear y administrar cupones de descuento'),
-            
             # Administración
             ('admin.gestionar_usuarios', 'admin', 'Crear, editar, activar/desactivar usuarios'),
             ('admin.alta_usuario', 'admin', 'Dar de alta usuarios (permiso granular, sin baja ni modificación)'),
@@ -112,6 +116,16 @@ class Command(BaseCommand):
             profile=client_profile,
             permission=permission_atoms['pedidos.ver'],
             defaults={'scope': 'propios'}
+        )
+        ProfilePermission.objects.get_or_create(
+            profile=client_profile,
+            permission=permission_atoms['suscripciones.ver'],
+            defaults={'scope': 'todos'}
+        )
+        ProfilePermission.objects.get_or_create(
+            profile=client_profile,
+            permission=permission_atoms['suscripciones.suscribirse'],
+            defaults={'scope': 'todos'}
         )
 
         # Perfil 5: Administrador General

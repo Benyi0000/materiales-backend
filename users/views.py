@@ -128,45 +128,65 @@ class GoogleOAuthView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        email = request.data.get('email')
-        first_name = request.data.get('first_name', '')
-        last_name = request.data.get('last_name', '')
-        google_id = request.data.get('google_id') # ID de Google retornado por OAuth
+        from django.conf import settings
+        from google.oauth2 import id_token as google_id_token
+        from google.auth.transport import requests as google_requests
 
-        if not email:
-            return Response({"error": "El email es requerido"}, status=status.HTTP_400_BAD_REQUEST)
+        token = request.data.get('token') or request.data.get('credential')
+        if not token:
+            return Response({"error": "Falta el token de Google."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # En una implementación real, aquí validaríamos el token con Google API:
-        # idinfo = id_token.verify_oauth2_token(token, requests.Request(), CLIENT_ID)
-        # email = idinfo['email']
+        client_id = settings.GOOGLE_OAUTH2_CLIENT_ID
+        if not client_id:
+            return Response({"error": "Google OAuth no está configurado en el servidor."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
-        # Generar un username único case-insensitive
-        base_username = email.split('@')[0]
-        username = base_username
-        counter = 1
-        while User.objects.filter(username__iexact=username).exclude(email__iexact=email).exists():
-            username = f"{base_username}{counter}"
-            counter += 1
+        # Verificación REAL del ID token con Google (valida firma, aud y emisor)
+        try:
+            idinfo = google_id_token.verify_oauth2_token(token, google_requests.Request(), client_id)
+        except Exception:
+            return Response({"error": "Token de Google inválido o expirado."}, status=status.HTTP_401_UNAUTHORIZED)
 
-        # Buscar o crear usuario
-        user, created = User.objects.get_or_create(
-            email=email,
-            defaults={
-                'username': username, # Nombre de usuario único
-                'first_name': first_name,
-                'last_name': last_name
-            }
-        )
+        if not idinfo.get('email_verified'):
+            return Response({"error": "El email de Google no está verificado."}, status=status.HTTP_401_UNAUTHORIZED)
 
-        if created:
-            # Dado que se autentica por Google, no tiene contraseña local
+        email = idinfo['email']
+        first_name = idinfo.get('given_name', '')
+        last_name = idinfo.get('family_name', '')
+
+        # Buscar usuario por email case-insensitive para evitar duplicados
+        # por diferencias de capitalización entre el registro manual y Google.
+        user = User.objects.filter(email__iexact=email).first()
+
+        if user:
+            created = False
+            # Si existía pero no había verificado su email, Google ya lo verificó → activar.
+            if not user.is_active:
+                user.is_active = True
+                user.save()
+        else:
+            created = True
+            # Generar un username único a partir del prefijo del email
+            base_username = email.split('@')[0]
+            username = base_username
+            counter = 1
+            while User.objects.filter(username__iexact=username).exists():
+                username = f"{base_username}{counter}"
+                counter += 1
+
+            user = User.objects.create(
+                username=username,
+                email=email,
+                first_name=first_name,
+                last_name=last_name,
+                is_active=True,
+            )
             user.set_unusable_password()
             user.save()
-            # El post_save signal ya le habrá asignado el perfil base "Comprar en la tienda"
+            # El post_save signal asigna el perfil base "Comprar en la tienda"
 
-        # Generar tokens JWT del backend
-        refresh = RefreshToken.for_user(user)
-        
+        # Tokens JWT con claim 'sid' (sesión única), igual que el login normal
+        refresh = CustomTokenObtainPairSerializer.get_token(user)
+
         return Response({
             'access': str(refresh.access_token),
             'refresh': str(refresh),
