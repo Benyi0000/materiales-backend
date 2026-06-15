@@ -97,6 +97,10 @@ else:
     }
     print("Base de datos: Usando SQLite local (fallback de desarrollo).")
 
+# MercadoPago
+MP_ACCESS_TOKEN = os.environ.get('MP_ACCESS_TOKEN', '')
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
+
 # Argon2 como algoritmo primario; PBKDF2 como fallback para rehashear
 # contraseñas existentes en el próximo login (migración transparente).
 PASSWORD_HASHERS = [

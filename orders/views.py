@@ -4,7 +4,7 @@ from rest_framework.views import APIView
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.pagination import PageNumberPagination
-from django.db import transaction
+from django.db import models, transaction
 from django.utils import timezone
 from .models import Order, Subscription, OrderItem, Coupon, Cart, CartItem, Plan, Payment
 from .serializers import (
@@ -551,6 +551,240 @@ class AdminSubscriptionActionView(APIView):
         else:
             return Response({"error": "action debe ser 'activate' o 'cancel'."}, status=status.HTTP_400_BAD_REQUEST)
         return Response(SubscriptionSerializer(sub).data, status=status.HTTP_200_OK)
+
+
+# ============================================================
+# MercadoPago Checkout Pro
+# ============================================================
+
+class MercadoPagoPreferenceView(APIView):
+    """
+    Crea el pedido y la preferencia de MercadoPago en un solo paso.
+    - Valida stock y cupón (igual que OrderCreateSerializer).
+    - Descuenta stock y crea el Order con status='pending_payment'.
+    - Llama a MP SDK para crear la preferencia.
+    - Devuelve { order_id, init_point, sandbox_init_point }.
+    El frontend redirige al init_point (o sandbox_init_point en testing).
+    """
+    permission_classes = [HasDynamicPermission]
+    required_permission = 'carrito.checkout'
+    required_scope = 'propios'
+
+    def post(self, request):
+        from django.conf import settings as django_settings
+        import mercadopago
+
+        user = request.user
+        shipping_data = request.data.get('shipping', {})
+        delivery_type = request.data.get('delivery_type', 'standard')
+        shipping_cost = 4000 if delivery_type == 'express' else 0
+
+        cart = Cart.objects.filter(user=user).prefetch_related('items__product').first()
+        if not cart or not cart.items.exists():
+            return Response({"error": "El carrito está vacío."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Validación de stock
+        stock_errors = []
+        for item in cart.items.all():
+            p = item.product
+            if not p.is_active:
+                stock_errors.append(f"{p.name} ya no está disponible.")
+            elif p.stock < item.quantity:
+                stock_errors.append(f"Stock insuficiente para {p.name}. Disponible: {p.stock}.")
+        if stock_errors:
+            return Response({"error": " ".join(stock_errors)}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Validación del cupón
+        if cart.coupon:
+            coupon_error = cart.coupon.validate_for_user(user)
+            if coupon_error:
+                return Response({"error": coupon_error}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            product_ids = list(cart.items.values_list('product_id', flat=True))
+            products = {p.id: p for p in Product.objects.select_for_update().filter(id__in=product_ids)}
+
+            # Revalidar stock con lock
+            for item in cart.items.all():
+                p = products[item.product_id]
+                if not p.is_active or p.stock < item.quantity:
+                    return Response(
+                        {"error": f"Stock insuficiente para {p.name}. Disponible: {p.stock}."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+            order = Order.objects.create(
+                user=user,
+                total=0,
+                status='pending_payment',
+                shipping_data={**shipping_data, 'delivery_type': delivery_type},
+            )
+            subtotal = 0
+
+            from catalog.models import StockMovement
+            mp_items = []
+            for item in cart.items.all():
+                p = products[item.product_id]
+                p.stock -= item.quantity
+                p.save(update_fields=['stock'])
+                StockMovement.objects.create(
+                    product=p, change=-item.quantity, reason='sale',
+                    resulting_stock=p.stock, user=user,
+                )
+                price = float(p.price)
+                subtotal += price * item.quantity
+                OrderItem.objects.create(order=order, product=p, quantity=item.quantity, price_at_purchase=p.price)
+                mp_items.append({
+                    "id": str(p.id),
+                    "title": p.name[:256],
+                    "quantity": item.quantity,
+                    "unit_price": price,
+                    "currency_id": "ARS",
+                })
+
+            # Ítem de envío express
+            if shipping_cost:
+                mp_items.append({
+                    "id": "shipping_express",
+                    "title": "Envío Express",
+                    "quantity": 1,
+                    "unit_price": float(shipping_cost),
+                    "currency_id": "ARS",
+                })
+
+            # Aplicar cupón
+            discount = 0
+            if cart.coupon:
+                coupon = Coupon.objects.select_for_update().get(id=cart.coupon_id)
+                err = coupon.validate_for_user(user)
+                if err:
+                    raise Exception(err)
+                discount = float(coupon.compute_discount(subtotal))
+                coupon.times_used += 1
+                coupon.save(update_fields=['times_used'])
+                CouponRedemption.objects.create(coupon=coupon, user=user, order=order)
+                order.coupon = coupon
+
+            order.total = subtotal - discount + shipping_cost
+            order.discount_amount = discount
+            order.save()
+
+            # Vaciar carrito
+            cart.items.all().delete()
+            cart.coupon = None
+            cart.save(update_fields=['coupon'])
+
+        # Crear preferencia en MercadoPago
+        frontend_url = django_settings.FRONTEND_URL.rstrip('/')
+        sdk = mercadopago.SDK(django_settings.MP_ACCESS_TOKEN)
+        preference_data = {
+            "items": mp_items,
+            "payer": {"email": user.email or f"{user.username}@craftiar.me"},
+            "external_reference": str(order.id),
+            "back_urls": {
+                "success": f"{frontend_url}/checkout/result?status=approved&order_id={order.id}",
+                "failure": f"{frontend_url}/checkout/result?status=failure&order_id={order.id}",
+                "pending": f"{frontend_url}/checkout/result?status=pending&order_id={order.id}",
+            },
+            "auto_return": "approved",
+            "notification_url": f"https://craftiar.me/api/orders/mp/webhook/",
+            "statement_descriptor": "Craftiar",
+        }
+        mp_response = sdk.preference().create(preference_data)
+        pref = mp_response.get("response", {})
+
+        if mp_response.get("status") not in (200, 201) or "id" not in pref:
+            # Si MP falla, revertir el pedido y restaurar stock
+            with transaction.atomic():
+                for item in order.items.select_related('product'):
+                    Product.objects.filter(id=item.product_id).update(
+                        stock=models.F('stock') + item.quantity
+                    )
+                order.status = 'cancelled'
+                order.save(update_fields=['status'])
+            return Response(
+                {"error": "No se pudo crear la preferencia de pago en MercadoPago. Intentá de nuevo."},
+                status=status.HTTP_502_BAD_GATEWAY
+            )
+
+        order.mp_preference_id = pref["id"]
+        order.save(update_fields=['mp_preference_id'])
+
+        return Response({
+            "order_id": order.id,
+            "preference_id": pref["id"],
+            "init_point": pref.get("init_point"),
+            "sandbox_init_point": pref.get("sandbox_init_point"),
+        }, status=status.HTTP_201_CREATED)
+
+
+class MercadoPagoWebhookView(APIView):
+    """
+    Webhook que recibe las notificaciones de MP (IPN / webhooks).
+    Verifica el pago con la API de MP y actualiza el estado del pedido.
+    No requiere autenticación JWT (MP llama sin token).
+    """
+    permission_classes = []
+    authentication_classes = []
+
+    def post(self, request):
+        from django.conf import settings as django_settings
+        import mercadopago
+
+        data = request.data
+        topic = data.get('type') or request.query_params.get('topic')
+        resource_id = data.get('data', {}).get('id') or request.query_params.get('id')
+
+        if topic not in ('payment', 'merchant_order') or not resource_id:
+            return Response({"status": "ignored"})
+
+        sdk = mercadopago.SDK(django_settings.MP_ACCESS_TOKEN)
+
+        if topic == 'payment':
+            mp_resp = sdk.payment().get(resource_id)
+            payment_data = mp_resp.get("response", {})
+            mp_status = payment_data.get("status")
+            order_id = payment_data.get("external_reference")
+            mp_payment_id = str(resource_id)
+        else:
+            # merchant_order: buscar el pago aprobado dentro de la orden
+            mo_resp = sdk.merchant_order().get(resource_id)
+            mo = mo_resp.get("response", {})
+            order_id = mo.get("external_reference")
+            payments = mo.get("payments", [])
+            approved = [p for p in payments if p.get("status") == "approved"]
+            if not approved:
+                return Response({"status": "no_approved_payment"})
+            mp_status = "approved"
+            mp_payment_id = str(approved[0].get("id", ""))
+
+        if not order_id:
+            return Response({"status": "no_order_ref"})
+
+        try:
+            order = Order.objects.get(id=int(order_id))
+        except (Order.DoesNotExist, ValueError):
+            return Response({"status": "order_not_found"}, status=status.HTTP_404_NOT_FOUND)
+
+        order.mp_payment_id = mp_payment_id
+
+        if mp_status == "approved" and order.status == "pending_payment":
+            order.status = "pending"
+            order.save(update_fields=['status', 'mp_payment_id'])
+            send_order_confirmation_email.delay(order.id)
+        elif mp_status in ("rejected", "cancelled") and order.status == "pending_payment":
+            # Pago rechazado: restaurar stock
+            with transaction.atomic():
+                for item in order.items.select_related('product'):
+                    Product.objects.filter(id=item.product_id).update(
+                        stock=models.F('stock') + item.quantity
+                    )
+            order.status = "cancelled"
+            order.save(update_fields=['status', 'mp_payment_id'])
+        else:
+            order.save(update_fields=['mp_payment_id'])
+
+        return Response({"status": "ok"})
 
 
 # ============================================================

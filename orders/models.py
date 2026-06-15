@@ -135,6 +135,7 @@ class Order(models.Model):
     Pedido realizado en la tienda
     """
     STATUS_CHOICES = (
+        ('pending_payment', 'Pendiente de Pago'),
         ('pending', 'Pendiente'),
         ('preparing', 'En preparación'),
         ('shipped', 'Enviado'),
@@ -143,15 +144,17 @@ class Order(models.Model):
     )
 
     # Secuencia lineal de avance de estado (spec pedidos/ventas, RN4).
-    # Las transiciones solo avanzan al estado inmediatamente siguiente; no hay
-    # saltos ni retrocesos. 'cancelled' queda fuera de la secuencia (RN6).
+    # pending_payment y cancelled quedan fuera: son estados de pago, no de logística.
     STATUS_SEQUENCE = ['pending', 'preparing', 'shipped', 'delivered']
 
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='orders')
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending_payment')
     total = models.DecimalField(max_digits=12, decimal_places=2)
     coupon = models.ForeignKey(Coupon, on_delete=models.SET_NULL, null=True, blank=True, related_name='orders')
     discount_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    mp_preference_id = models.CharField(max_length=255, null=True, blank=True)
+    mp_payment_id = models.CharField(max_length=255, null=True, blank=True)
+    shipping_data = models.JSONField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

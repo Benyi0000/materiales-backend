@@ -4,6 +4,7 @@ from .views import (
     OrderViewSet, SubscriptionView, CartView, CartItemView, CartCouponView, CouponViewSet,
     PlanViewSet, SubscriptionCheckoutView, CancelMySubscriptionView, PaymentHistoryView,
     AdminSubscriptionListView, AdminSubscriptionActionView, DashboardView, OrderReportView,
+    MercadoPagoPreferenceView, MercadoPagoWebhookView,
 )
 
 router = DefaultRouter()
@@ -24,5 +25,7 @@ urlpatterns = [
     path('cart/items/', CartItemView.as_view(), name='cart-item-add'),
     path('cart/items/<int:product_id>/', CartItemView.as_view(), name='cart-item-detail'),
     path('cart/coupon/', CartCouponView.as_view(), name='cart-coupon'),
+    path('mp/create-preference/', MercadoPagoPreferenceView.as_view(), name='mp-create-preference'),
+    path('mp/webhook/', MercadoPagoWebhookView.as_view(), name='mp-webhook'),
     path('', include(router.urls)),
 ]
