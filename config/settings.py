@@ -97,6 +97,13 @@ else:
     }
     print("Base de datos: Usando SQLite local (fallback de desarrollo).")
 
+# Argon2 como algoritmo primario; PBKDF2 como fallback para rehashear
+# contraseñas existentes en el próximo login (migración transparente).
+PASSWORD_HASHERS = [
+    'django.contrib.auth.hashers.Argon2PasswordHasher',
+    'django.contrib.auth.hashers.PBKDF2PasswordHasher',
+]
+
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
     {

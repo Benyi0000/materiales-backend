@@ -114,3 +114,5 @@ zstandard==0.25.0
 # Worker async para gunicorn: necesario para las conexiones SSE persistentes
 # (stream de sesión única) sin bloquear los workers sync.
 gevent
+# Argon2: algoritmo de hasheo de contraseñas recomendado por OWASP
+argon2-cffi
