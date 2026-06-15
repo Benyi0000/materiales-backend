@@ -115,7 +115,8 @@ def send_verification_email(user_id, token, uid):
     from django.conf import settings
     try:
         user = User.objects.get(id=user_id)
-        verification_url = f'http://localhost:3000/auth/verify?uid={uid}&token={token}'
+        frontend_url = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
+        verification_url = f'{frontend_url}/auth/verify?uid={uid}&token={token}'
         subject = 'Verifica tu cuenta'
         message = f'Hola {user.username},\n\nPor favor, verifica tu cuenta haciendo clic en el siguiente enlace:\n{verification_url}'
         send_mail(

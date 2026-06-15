@@ -163,11 +163,15 @@ from celery.schedules import crontab
 CELERY_BEAT_SCHEDULE = {
     'avisar-vencimiento-suscripciones': {
         'task': 'orders.tasks.notify_expiring_subscriptions',
-        'schedule': crontab(hour=8, minute=0),  # diaria 08:00
+        'schedule': crontab(hour=8, minute=0),    # diaria 08:00
     },
     'procesar-renovaciones-suscripciones': {
         'task': 'orders.tasks.process_subscription_renewals',
-        'schedule': crontab(hour=0, minute=30),  # diaria 00:30
+        'schedule': crontab(hour=0, minute=30),   # diaria 00:30
+    },
+    'revocar-perfiles-vencidos': {
+        'task': 'users.tasks.revoke_expired_profiles',
+        'schedule': crontab(hour=1, minute=0),    # diaria 01:00
     },
 }
 
