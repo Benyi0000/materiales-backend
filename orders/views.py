@@ -9,11 +9,12 @@ from django.utils import timezone
 from .models import Order, Subscription, OrderItem, Coupon, Cart, CartItem, Plan, Payment
 from .serializers import (
     OrderSerializer, OrderCreateSerializer, SubscriptionSerializer,
-    CouponSerializer, CartSerializer, PlanSerializer, PaymentSerializer
+    CouponSerializer, CartSerializer, PlanSerializer, PaymentSerializer,
+    validate_shipping_fields,
 )
 from catalog.models import Product
 from users.permissions import HasDynamicPermission, has_custom_permission
-from .tasks import send_order_status_change_email
+from .tasks import send_order_status_change_email, send_order_confirmation_email
 from . import subscriptions as subs_service
 
 
@@ -575,8 +576,19 @@ class MercadoPagoPreferenceView(APIView):
         import mercadopago
 
         user = request.user
-        shipping_data = request.data.get('shipping', {})
+        raw_shipping = request.data.get('shipping', {})
         delivery_type = request.data.get('delivery_type', 'standard')
+
+        if delivery_type not in ('standard', 'express'):
+            return Response({"error": "Tipo de entrega inválido."}, status=status.HTTP_400_BAD_REQUEST)
+
+        from rest_framework import serializers as drf_serializers
+        try:
+            shipping_data = validate_shipping_fields(raw_shipping)
+        except drf_serializers.ValidationError as exc:
+            field_errors = exc.detail.get('shipping', exc.detail)
+            return Response({"error": "Datos de envío inválidos.", "shipping": field_errors}, status=status.HTTP_400_BAD_REQUEST)
+
         shipping_cost = 4000 if delivery_type == 'express' else 0
 
         cart = Cart.objects.filter(user=user).prefetch_related('items__product').first()
@@ -617,6 +629,8 @@ class MercadoPagoPreferenceView(APIView):
                 user=user,
                 total=0,
                 status='pending_payment',
+                checkout_payment_method='mercadopago',
+                shipping_cost=shipping_cost,
                 shipping_data={**shipping_data, 'delivery_type': delivery_type},
             )
             subtotal = 0
@@ -675,8 +689,9 @@ class MercadoPagoPreferenceView(APIView):
             cart.save(update_fields=['coupon'])
 
         # Crear preferencia en MercadoPago
-        frontend_url = django_settings.FRONTEND_URL.rstrip('/')
-        sdk = mercadopago.SDK(django_settings.MP_ACCESS_TOKEN)
+        import os as _os
+        frontend_url = _os.environ.get('FRONTEND_URL', 'https://craftiar.me').rstrip('/')
+        sdk = mercadopago.SDK(_os.environ.get('MP_ACCESS_TOKEN', ''))
         use_auto_return = frontend_url.startswith("https://")
         preference_data = {
             "items": mp_items,
@@ -740,7 +755,8 @@ class MercadoPagoWebhookView(APIView):
         if topic not in ('payment', 'merchant_order') or not resource_id:
             return Response({"status": "ignored"})
 
-        sdk = mercadopago.SDK(django_settings.MP_ACCESS_TOKEN)
+        import os as _os
+        sdk = mercadopago.SDK(_os.environ.get('MP_ACCESS_TOKEN', ''))
 
         if topic == 'payment':
             mp_resp = sdk.payment().get(resource_id)
@@ -779,6 +795,8 @@ class MercadoPagoWebhookView(APIView):
             "payment_method": payment_data.get("payment_method_id"),
             "installments": payment_data.get("installments"),
             "transaction_amount": str(payment_data.get("transaction_amount", "")),
+            "net_received_amount": str(payment_data.get("net_received_amount", "")),
+            "fee_details": payment_data.get("fee_details", []),
             "currency_id": payment_data.get("currency_id"),
             "payer_email": payment_data.get("payer", {}).get("email"),
             "payer_id": str(payment_data.get("payer", {}).get("id", "")),

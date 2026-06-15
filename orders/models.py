@@ -152,6 +152,19 @@ class Order(models.Model):
     total = models.DecimalField(max_digits=12, decimal_places=2)
     coupon = models.ForeignKey(Coupon, on_delete=models.SET_NULL, null=True, blank=True, related_name='orders')
     discount_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    PAYMENT_METHOD_CHOICES = [
+        ('mercadopago', 'MercadoPago'),
+        ('card',        'Tarjeta (simulado)'),
+        ('cash',        'Efectivo'),
+    ]
+
+    checkout_payment_method = models.CharField(
+        max_length=20,
+        choices=PAYMENT_METHOD_CHOICES,
+        blank=True,
+        default='',
+    )
+    shipping_cost = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     mp_preference_id = models.CharField(max_length=255, null=True, blank=True)
     mp_payment_id = models.CharField(max_length=255, null=True, blank=True)
     mp_payment_data = models.JSONField(null=True, blank=True)

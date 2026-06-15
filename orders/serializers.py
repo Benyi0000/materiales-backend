@@ -1,9 +1,121 @@
+import re
+import phonenumbers
+from phonenumbers import PhoneNumberType
 from rest_framework import serializers
 from django.db import transaction
 from .models import Subscription, Order, OrderItem, Coupon, CouponRedemption, Cart, CartItem, Plan, Payment
 from catalog.models import Product
 from users.models import Profile
 from .tasks import send_order_confirmation_email
+
+
+def normalizar_celular_ar(raw: str) -> str | None:
+    """
+    Normaliza un número de celular argentino a exactamente 10 dígitos sin prefijos.
+
+    Acepta:
+      "3704123456"          → "3704123456"
+      "370 4123456"         → "3704123456"
+      "370-4123456"         → "3704123456"
+      "370 15 4123456"      → "3704123456"  (quita el 15)
+      "+54 9 370 4123456"   → "3704123456"
+      "03704123456"         → "3704123456"
+
+    Retorna None si el número no es válido o no tiene exactamente 10 dígitos
+    después de normalizar.
+    """
+    if not raw:
+        return None
+    try:
+        parsed = phonenumbers.parse(raw.strip(), "AR")
+    except phonenumbers.NumberParseException:
+        return None
+
+    if not phonenumbers.is_valid_number(parsed):
+        return None
+
+    # Solo aceptamos números argentinos (código de país +54)
+    if parsed.country_code != 54:
+        return None
+
+    num_type = phonenumbers.number_type(parsed)
+    # Aceptamos MOBILE, FIXED_LINE y FIXED_LINE_OR_MOBILE.
+    # phonenumbers clasifica como FIXED_LINE los números de 10 dígitos sin
+    # prefijo +54 9 o 15; con esos prefijos los marca como MOBILE.
+    # Para un campo de contacto se acepta cualquier número argentino válido.
+    _VALID_TYPES = (
+        PhoneNumberType.MOBILE,
+        PhoneNumberType.FIXED_LINE,
+        PhoneNumberType.FIXED_LINE_OR_MOBILE,
+    )
+    if num_type not in _VALID_TYPES:
+        return None
+
+    national = str(parsed.national_number)
+
+    # phonenumbers devuelve 11 dígitos (con el 9 de móvil) para números en
+    # formato internacional (+54 9 …) o con prefijo "15".  Se saca ese 9.
+    if len(national) == 11 and national.startswith("9"):
+        national = national[1:]
+
+    return national if len(national) == 10 else None
+
+
+def validate_shipping_fields(shipping: dict) -> dict:
+    """
+    Valida y limpia los campos de envío. Retorna el dict limpio o lanza
+    serializers.ValidationError con los errores por campo.
+    """
+    errors = {}
+
+    name = (shipping.get('name') or '').strip()
+    address = (shipping.get('address') or '').strip()
+    city = (shipping.get('city') or '').strip()
+    zip_code = (shipping.get('zip') or '').strip()
+    phone_raw = (shipping.get('phone') or '').strip()
+
+    if not name:
+        errors['name'] = "El nombre es obligatorio."
+    elif len(name) < 3:
+        errors['name'] = "El nombre debe tener al menos 3 caracteres."
+    elif not re.match(r"^[a-zA-ZáéíóúÁÉÍÓÚüÜñÑ\s'\-]+$", name):
+        errors['name'] = "El nombre solo puede contener letras y espacios."
+
+    if not address:
+        errors['address'] = "La dirección es obligatoria."
+    elif len(address) < 5:
+        errors['address'] = "Ingresá una dirección válida (al menos 5 caracteres)."
+
+    if not city:
+        errors['city'] = "La ciudad es obligatoria."
+    elif len(city) < 2:
+        errors['city'] = "Ingresá la ciudad."
+    elif not re.match(r"^[a-zA-Z0-9áéíóúÁÉÍÓÚüÜñÑ\s'\-]+$", city):
+        errors['city'] = "La ciudad contiene caracteres no válidos."
+
+    if zip_code:
+        if not re.match(r"^\d{4}$", zip_code):
+            errors['zip'] = "El código postal debe tener 4 dígitos numéricos."
+
+    normalized_phone = ""
+    if phone_raw:
+        normalized_phone = normalizar_celular_ar(phone_raw)
+        if normalized_phone is None:
+            errors['phone'] = (
+                "Ingresá un celular argentino válido de 10 dígitos. "
+                "Ej: 1145678901, +54 9 11 4567 8901 o 011 15 4567-8901."
+            )
+
+    if errors:
+        raise serializers.ValidationError({"shipping": errors})
+
+    return {
+        'name': name,
+        'address': address,
+        'city': city,
+        'zip': zip_code,
+        'phone': normalized_phone,
+    }
 
 class PlanSerializer(serializers.ModelSerializer):
     profiles = serializers.PrimaryKeyRelatedField(many=True, queryset=Profile.objects.all(), required=False)
@@ -55,6 +167,7 @@ class OrderSerializer(serializers.ModelSerializer):
     class Meta:
         model = Order
         fields = ('id', 'username', 'status', 'total', 'coupon_code', 'discount_amount',
+                  'checkout_payment_method', 'shipping_cost',
                   'mp_preference_id', 'mp_payment_id', 'mp_payment_data', 'mp_paid_at', 'shipping_data',
                   'created_at', 'updated_at', 'items')
 
@@ -136,13 +249,25 @@ class CartSerializer(serializers.ModelSerializer):
 
 class OrderCreateSerializer(serializers.Serializer):
     """
-    Checkout desde el carrito persistente del usuario (spec Carrito y Pedidos).
+    Checkout desde el carrito persistente del usuario (flujos tarjeta/efectivo).
+    - Valida y persiste datos de envío, tipo de entrega y método de pago.
     - RN-11: validación de stock todo-o-nada.
     - RN-09: revalidación del cupón al confirmar.
     - RN-12: se cobra el precio vigente al momento del checkout.
-    - RN-13: el pedido nace 'Pendiente de Pago' (pago simulado, sin pasarela).
     - RN-14: el email de confirmación es asíncrono y no bloquea la creación.
     """
+    shipping = serializers.DictField(required=True)
+    delivery_type = serializers.ChoiceField(
+        choices=['standard', 'express'],
+        default='standard',
+    )
+    payment_method = serializers.ChoiceField(
+        choices=['card', 'cash'],
+        default='cash',
+    )
+
+    def validate_shipping(self, value):
+        return validate_shipping_fields(value)
 
     def validate(self, data):
         user = self.context['request'].user
@@ -164,7 +289,7 @@ class OrderCreateSerializer(serializers.Serializer):
         if stock_errors:
             raise serializers.ValidationError({"stock": stock_errors})
 
-        # RN-09: revalidar el cupón aplicado; si dejó de ser válido se rechaza con mensaje claro
+        # RN-09: revalidar el cupón aplicado
         if cart.coupon:
             error = cart.coupon.validate_for_user(user)
             if error:
@@ -178,9 +303,12 @@ class OrderCreateSerializer(serializers.Serializer):
     def create(self, validated_data):
         user = self.context['request'].user
         cart = validated_data['cart']
+        shipping = validated_data['shipping']
+        delivery_type = validated_data['delivery_type']
+        payment_method = validated_data['payment_method']
+        shipping_cost = 4000 if delivery_type == 'express' else 0
 
         with transaction.atomic():
-            # Bloquear los productos involucrados para evitar sobreventa concurrente
             product_ids = list(cart.items.values_list('product_id', flat=True))
             products = {p.id: p for p in Product.objects.select_for_update().filter(id__in=product_ids)}
 
@@ -192,7 +320,18 @@ class OrderCreateSerializer(serializers.Serializer):
                         "stock": [f"Stock insuficiente para {product.name} (SKU: {product.sku}). Disponible: {product.stock}, solicitado: {item.quantity}."]
                     })
 
-            order = Order.objects.create(user=user, total=0, status='pending')
+            order = Order.objects.create(
+                user=user,
+                total=0,
+                status='pending',
+                checkout_payment_method=payment_method,
+                shipping_cost=shipping_cost,
+                shipping_data={
+                    **shipping,
+                    'delivery_type': delivery_type,
+                    'payment_method': payment_method,
+                },
+            )
             subtotal = 0
 
             from catalog.models import StockMovement
@@ -228,16 +367,15 @@ class OrderCreateSerializer(serializers.Serializer):
                 CouponRedemption.objects.create(coupon=coupon, user=user, order=order)
                 order.coupon = coupon
 
-            order.total = subtotal - discount
+            order.total = subtotal - discount + shipping_cost
             order.discount_amount = discount
             order.save()
 
-            # Vaciar el carrito una vez confirmado el pedido
             cart.items.all().delete()
             cart.coupon = None
             cart.save(update_fields=['coupon'])
 
-        # RN-14: email asíncrono; su falla no bloquea la creación del pedido
+        # RN-14: email asíncrono
         send_order_confirmation_email.delay(order.id)
 
         return order

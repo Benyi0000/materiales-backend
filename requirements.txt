@@ -118,3 +118,5 @@ gevent
 argon2-cffi
 # MercadoPago: SDK oficial para integración de pagos
 mercadopago
+# Validación y normalización de números telefónicos (libphonenumber de Google)
+phonenumbers
