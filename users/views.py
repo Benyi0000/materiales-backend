@@ -153,29 +153,36 @@ class GoogleOAuthView(APIView):
         first_name = idinfo.get('given_name', '')
         last_name = idinfo.get('family_name', '')
 
-        # Generar un username único case-insensitive
-        base_username = email.split('@')[0]
-        username = base_username
-        counter = 1
-        while User.objects.filter(username__iexact=username).exclude(email__iexact=email).exists():
-            username = f"{base_username}{counter}"
-            counter += 1
+        # Buscar usuario por email case-insensitive para evitar duplicados
+        # por diferencias de capitalización entre el registro manual y Google.
+        user = User.objects.filter(email__iexact=email).first()
 
-        # Buscar o crear usuario
-        user, created = User.objects.get_or_create(
-            email=email,
-            defaults={
-                'username': username, # Nombre de usuario único
-                'first_name': first_name,
-                'last_name': last_name
-            }
-        )
+        if user:
+            created = False
+            # Si existía pero no había verificado su email, Google ya lo verificó → activar.
+            if not user.is_active:
+                user.is_active = True
+                user.save()
+        else:
+            created = True
+            # Generar un username único a partir del prefijo del email
+            base_username = email.split('@')[0]
+            username = base_username
+            counter = 1
+            while User.objects.filter(username__iexact=username).exists():
+                username = f"{base_username}{counter}"
+                counter += 1
 
-        if created:
-            # Dado que se autentica por Google, no tiene contraseña local
+            user = User.objects.create(
+                username=username,
+                email=email,
+                first_name=first_name,
+                last_name=last_name,
+                is_active=True,
+            )
             user.set_unusable_password()
             user.save()
-            # El post_save signal ya le habrá asignado el perfil base "Comprar en la tienda"
+            # El post_save signal asigna el perfil base "Comprar en la tienda"
 
         # Tokens JWT con claim 'sid' (sesión única), igual que el login normal
         refresh = CustomTokenObtainPairSerializer.get_token(user)
