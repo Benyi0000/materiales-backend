@@ -154,6 +154,8 @@ class Order(models.Model):
     discount_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     mp_preference_id = models.CharField(max_length=255, null=True, blank=True)
     mp_payment_id = models.CharField(max_length=255, null=True, blank=True)
+    mp_payment_data = models.JSONField(null=True, blank=True)
+    mp_paid_at = models.DateTimeField(null=True, blank=True)
     shipping_data = models.JSONField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

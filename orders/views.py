@@ -677,6 +677,7 @@ class MercadoPagoPreferenceView(APIView):
         # Crear preferencia en MercadoPago
         frontend_url = django_settings.FRONTEND_URL.rstrip('/')
         sdk = mercadopago.SDK(django_settings.MP_ACCESS_TOKEN)
+        use_auto_return = frontend_url.startswith("https://")
         preference_data = {
             "items": mp_items,
             "payer": {"email": user.email or f"{user.username}@craftiar.me"},
@@ -686,10 +687,11 @@ class MercadoPagoPreferenceView(APIView):
                 "failure": f"{frontend_url}/checkout/result?status=failure&order_id={order.id}",
                 "pending": f"{frontend_url}/checkout/result?status=pending&order_id={order.id}",
             },
-            "auto_return": "approved",
-            "notification_url": f"https://craftiar.me/api/orders/mp/webhook/",
+            "notification_url": "https://craftiar.me/api/orders/mp/webhook/",
             "statement_descriptor": "Craftiar",
         }
+        if use_auto_return:
+            preference_data["auto_return"] = "approved"
         mp_response = sdk.preference().create(preference_data)
         pref = mp_response.get("response", {})
 
@@ -747,7 +749,6 @@ class MercadoPagoWebhookView(APIView):
             order_id = payment_data.get("external_reference")
             mp_payment_id = str(resource_id)
         else:
-            # merchant_order: buscar el pago aprobado dentro de la orden
             mo_resp = sdk.merchant_order().get(resource_id)
             mo = mo_resp.get("response", {})
             order_id = mo.get("external_reference")
@@ -757,6 +758,9 @@ class MercadoPagoWebhookView(APIView):
                 return Response({"status": "no_approved_payment"})
             mp_status = "approved"
             mp_payment_id = str(approved[0].get("id", ""))
+            # Obtener detalle completo del pago aprobado
+            mp_resp = sdk.payment().get(mp_payment_id)
+            payment_data = mp_resp.get("response", {})
 
         if not order_id:
             return Response({"status": "no_order_ref"})
@@ -766,23 +770,42 @@ class MercadoPagoWebhookView(APIView):
         except (Order.DoesNotExist, ValueError):
             return Response({"status": "order_not_found"}, status=status.HTTP_404_NOT_FOUND)
 
+        # Extraer datos relevantes del pago para guardar en DB
+        mp_snapshot = {
+            "payment_id": mp_payment_id,
+            "status": payment_data.get("status"),
+            "status_detail": payment_data.get("status_detail"),
+            "payment_type": payment_data.get("payment_type_id"),
+            "payment_method": payment_data.get("payment_method_id"),
+            "installments": payment_data.get("installments"),
+            "transaction_amount": str(payment_data.get("transaction_amount", "")),
+            "currency_id": payment_data.get("currency_id"),
+            "payer_email": payment_data.get("payer", {}).get("email"),
+            "payer_id": str(payment_data.get("payer", {}).get("id", "")),
+            "card_last_four": payment_data.get("card", {}).get("last_four_digits"),
+            "card_holder": payment_data.get("card", {}).get("cardholder", {}).get("name"),
+            "date_approved": str(payment_data.get("date_approved", "")),
+            "date_created": str(payment_data.get("date_created", "")),
+        }
+
         order.mp_payment_id = mp_payment_id
+        order.mp_payment_data = mp_snapshot
 
         if mp_status == "approved" and order.status == "pending_payment":
             order.status = "pending"
-            order.save(update_fields=['status', 'mp_payment_id'])
+            order.mp_paid_at = timezone.now()
+            order.save(update_fields=['status', 'mp_payment_id', 'mp_payment_data', 'mp_paid_at'])
             send_order_confirmation_email.delay(order.id)
         elif mp_status in ("rejected", "cancelled") and order.status == "pending_payment":
-            # Pago rechazado: restaurar stock
             with transaction.atomic():
                 for item in order.items.select_related('product'):
                     Product.objects.filter(id=item.product_id).update(
                         stock=models.F('stock') + item.quantity
                     )
             order.status = "cancelled"
-            order.save(update_fields=['status', 'mp_payment_id'])
+            order.save(update_fields=['status', 'mp_payment_id', 'mp_payment_data'])
         else:
-            order.save(update_fields=['mp_payment_id'])
+            order.save(update_fields=['mp_payment_id', 'mp_payment_data'])
 
         return Response({"status": "ok"})
 
