@@ -216,6 +216,22 @@ class SubscriptionView(generics.RetrieveUpdateDestroyAPIView):
             user=self.request.user,
             defaults={'plan': 'free', 'status': 'active'}
         )
+        # Self-heal: si el plan otorgaba perfiles y al usuario ya no le queda
+        # ninguno asignado (ej. se lo revocaron desde Gestión de Perfiles),
+        # entonces ya no está suscripto.
+        if subscription.current_plan_id:
+            from users.models import UserProfileAssignment
+            profile_ids = list(subscription.current_plan.profiles.values_list('id', flat=True))
+            if profile_ids:
+                still = UserProfileAssignment.objects.filter(
+                    user=self.request.user, profile_id__in=profile_ids, is_active=True
+                ).exists()
+                if not still:
+                    subscription.current_plan = None
+                    subscription.status = 'expired'
+                    subscription.cancel_at_period_end = True
+                    subscription.plan = 'free'
+                    subscription.save(update_fields=['current_plan', 'status', 'cancel_at_period_end', 'plan'])
         return subscription
 
     def post(self, request):
@@ -463,6 +479,8 @@ class SubscriptionCheckoutView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        if not has_custom_permission(request.user, 'suscripciones.suscribirse', 'todos'):
+            return Response({"error": "No tenés permiso para suscribirte."}, status=status.HTTP_403_FORBIDDEN)
         plan_id = request.data.get('plan_id') or request.data.get('plan')
         plan = Plan.objects.filter(id=plan_id, is_active=True).first()
         if not plan:
@@ -477,6 +495,8 @@ class CancelMySubscriptionView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        if not has_custom_permission(request.user, 'suscripciones.suscribirse', 'todos'):
+            return Response({"error": "No tenés permiso para gestionar tu suscripción."}, status=status.HTTP_403_FORBIDDEN)
         sub = subs_service.cancel_plan(request.user, by=request.user)
         if not sub:
             return Response({"error": "No tenés una suscripción activa."}, status=status.HTTP_400_BAD_REQUEST)

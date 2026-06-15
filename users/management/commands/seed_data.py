@@ -41,7 +41,11 @@ class Command(BaseCommand):
             # Tutor IA
             ('tutor.acceder', 'tutor', 'Acceder al Tutor Visual IA'),
             ('tutor.ver_historial', 'tutor', 'Ver historial de proyectos'),
-            
+
+            # Suscripciones (cliente)
+            ('suscripciones.ver', 'suscripciones', 'Ver planes y la sección Mis suscripciones'),
+            ('suscripciones.suscribirse', 'suscripciones', 'Contratar y cancelar planes de suscripción'),
+
             # Gestión Interna
             ('gestion.ver_dashboard', 'gestion', 'Ver métricas y reportes de ventas'),
             ('gestion.exportar_reportes', 'gestion', 'Acceder y exportar (CSV) el reporte de pedidos'),
