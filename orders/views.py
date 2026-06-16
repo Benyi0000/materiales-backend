@@ -107,9 +107,14 @@ class OrderViewSet(viewsets.ModelViewSet):
             queryset = self._apply_sales_filters(queryset)
         else:
             # Vista de COMPRAS (pedidos.ver): solo lo que el usuario compró (RN3).
-            # Se excluyen los pending_payment: son checkouts MP abandonados que
-            # nunca se confirmaron; el comprador no puede retomarlos.
-            queryset = Order.objects.filter(user=user).exclude(status='pending_payment')
+            # Se excluyen los pending_payment y los cancelled de MP sin pago
+            # confirmado: son checkouts abandonados que el comprador no puede
+            # retomar y que nunca representaron una compra real.
+            queryset = (
+                Order.objects.filter(user=user)
+                .exclude(status='pending_payment')
+                .exclude(status='cancelled', checkout_payment_method='mercadopago', mp_paid_at__isnull=True)
+            )
             status_filter = self.request.query_params.get('status')
             if status_filter:
                 queryset = queryset.filter(status=status_filter)
