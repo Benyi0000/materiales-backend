@@ -7,6 +7,7 @@ class CategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = Category
         fields = ('id', 'name', 'slug', 'parent', 'subcategories')
+        extra_kwargs = {'slug': {'read_only': True}}
 
     def get_subcategories(self, obj):
         # Serializar subcategorías de primer nivel
@@ -31,6 +32,15 @@ class ProductSerializer(serializers.ModelSerializer):
 
     def get_subcategory_names(self, obj):
         return [cat.name for cat in obj.subcategories.all()]
+
+    def validate_sku(self, value):
+        # SKU único e insensible a mayúsculas, con mensaje claro en español.
+        qs = Product.objects.filter(sku__iexact=value.strip())
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError("Ya existe un producto con ese SKU.")
+        return value
 
 
 class StockMovementSerializer(serializers.ModelSerializer):

@@ -94,13 +94,50 @@ class StandardResultsSetPagination(PageNumberPagination):
     max_page_size = 100
 
 
-class CategoryListView(generics.ListAPIView):
+class CategoryListView(generics.ListCreateAPIView):
     """
-    API pública para listar categorías jerárquicas del catálogo.
+    Categorías jerárquicas del catálogo.
+    - GET: público (lista categorías de nivel superior con sus subcategorías anidadas).
+    - POST: crea una categoría. Si se envía 'parent' es una subcategoría; si no, es
+      una categoría de nivel superior. El slug se genera automáticamente a partir del
+      nombre (único). Requiere el permiso 'catalogo.crear_producto'.
     """
     queryset = Category.objects.filter(parent__isnull=True).order_by('name')
     serializer_class = CategorySerializer
-    permission_classes = [AllowAny]
+
+    def get_permissions(self):
+        if self.request.method == 'POST':
+            self.required_permission = 'catalogo.crear_producto'
+            self.required_scope = 'todos'
+            return [HasDynamicPermission()]
+        return [AllowAny()]
+
+    def create(self, request, *args, **kwargs):
+        # Evitar nombres de categoría duplicados en el mismo nivel (mismo padre).
+        name = (request.data.get('name') or '').strip()
+        parent = request.data.get('parent') or None
+        if name and Category.objects.filter(name__iexact=name, parent_id=parent).exists():
+            return Response(
+                {"name": ["Ya existe una categoría con ese nombre en ese nivel."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().create(request, *args, **kwargs)
+
+    def perform_create(self, serializer):
+        from django.utils.text import slugify
+        name = serializer.validated_data.get('name', '').strip()
+        base = slugify(name) or 'categoria'
+        slug = base
+        i = 2
+        while Category.objects.filter(slug=slug).exists():
+            slug = f"{base}-{i}"
+            i += 1
+        category = serializer.save(slug=slug)
+        logger.info(
+            f"AUDIT [Categoría]: {self.request.user.username} creó la categoría "
+            f"'{category.name}'"
+            + (f" (subcategoría de id={category.parent_id})" if category.parent_id else " (nivel superior)")
+        )
 
 
 class ProductViewSet(viewsets.ModelViewSet):
@@ -114,7 +151,7 @@ class ProductViewSet(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['category', 'category__slug', 'category__name', 'subcategories', 'subcategories__slug', 'is_active']
     search_fields = ['name', 'description', 'sku']
-    ordering_fields = ['price', 'name']
+    ordering_fields = ['price', 'name', 'stock']
 
     def get_queryset(self):
         user = self.request.user
