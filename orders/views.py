@@ -115,9 +115,22 @@ class OrderViewSet(viewsets.ModelViewSet):
                 .exclude(status='pending_payment')
                 .exclude(status='cancelled', checkout_payment_method='mercadopago', mp_paid_at__isnull=True)
             )
-            status_filter = self.request.query_params.get('status')
+            params = self.request.query_params
+            status_filter = params.get('status')
             if status_filter:
                 queryset = queryset.filter(status=status_filter)
+            # Filtro por categoría (RN spec Mis Compras): pedidos que contienen
+            # al menos un producto de la categoría indicada.
+            category = params.get('category')
+            if category:
+                queryset = queryset.filter(items__product__category_id=category).distinct()
+            # Filtro por fecha (rango).
+            date_from = params.get('date_from')
+            if date_from:
+                queryset = queryset.filter(created_at__date__gte=date_from)
+            date_to = params.get('date_to')
+            if date_to:
+                queryset = queryset.filter(created_at__date__lte=date_to)
 
         return queryset.order_by('-created_at')
 

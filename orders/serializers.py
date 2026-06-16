@@ -153,10 +153,11 @@ class SubscriptionSerializer(serializers.ModelSerializer):
 class OrderItemSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source='product.name', read_only=True)
     product_sku = serializers.CharField(source='product.sku', read_only=True)
+    product_image = serializers.CharField(source='product.image_url', read_only=True, default=None)
 
     class Meta:
         model = OrderItem
-        fields = ('id', 'product', 'product_name', 'product_sku', 'quantity', 'price_at_purchase')
+        fields = ('id', 'product', 'product_name', 'product_sku', 'product_image', 'quantity', 'price_at_purchase')
 
 
 class OrderSerializer(serializers.ModelSerializer):
