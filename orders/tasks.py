@@ -102,6 +102,46 @@ def notify_expiring_subscriptions():
 
 
 @shared_task
+def cancel_stale_pending_payment_orders():
+    """
+    Cancela pedidos que llevan más de 30 min en pending_payment sin confirmación
+    de MercadoPago. Repone el stock de cada ítem para dejarlo disponible de nuevo.
+    Se ejecuta cada 15 minutos vía Celery Beat.
+    """
+    from django.db import transaction
+    from catalog.models import Product, StockMovement
+
+    cutoff = timezone.now() - timezone.timedelta(minutes=30)
+    stale = list(
+        Order.objects.filter(
+            status='pending_payment',
+            created_at__lte=cutoff,
+        ).prefetch_related('items__product')
+    )
+
+    cancelled_ids = []
+    for order in stale:
+        with transaction.atomic():
+            for item in order.items.select_related('product'):
+                product = Product.objects.select_for_update().get(id=item.product_id)
+                product.stock += item.quantity
+                product.save(update_fields=['stock'])
+                StockMovement.objects.create(
+                    product=product,
+                    change=+item.quantity,
+                    reason='restock',
+                    resulting_stock=product.stock,
+                    user=order.user,
+                )
+            order.status = 'cancelled'
+            order.save(update_fields=['status', 'updated_at'])
+            cancelled_ids.append(order.id)
+
+    logger.info(f"Pedidos pending_payment expirados cancelados: {cancelled_ids}")
+    return f"Cancelados {len(cancelled_ids)} pedidos: {cancelled_ids}"
+
+
+@shared_task
 def process_subscription_renewals():
     """
     Tarea diaria: renueva (cobro simulado) las suscripciones vencidas con

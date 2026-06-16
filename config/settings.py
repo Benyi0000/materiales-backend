@@ -184,6 +184,10 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'users.tasks.revoke_expired_profiles',
         'schedule': crontab(hour=1, minute=0),    # diaria 01:00
     },
+    'cancelar-pending-payment-expirados': {
+        'task': 'orders.tasks.cancel_stale_pending_payment_orders',
+        'schedule': crontab(minute='*/15'),        # cada 15 minutos
+    },
 }
 
 # Configuración de Autenticación de Google (OAuth 2.0)
