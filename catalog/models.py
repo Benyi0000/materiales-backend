@@ -97,6 +97,13 @@ class Product(models.Model):
         # Fallback de desarrollo en caso de error de importación
         embedding = models.BinaryField(null=True, blank=True, help_text="Vectores semánticos (768 dimensiones)")
 
+    embedding_updated_at = models.DateTimeField(
+        null=True, blank=True, help_text="Última vez que se generó exitosamente el embedding"
+    )
+    embedding_error = models.CharField(
+        max_length=255, blank=True, help_text="Último error al generar el embedding (vacío si no hubo)"
+    )
+
     def __str__(self):
         return f"{self.sku} - {self.name}"
 

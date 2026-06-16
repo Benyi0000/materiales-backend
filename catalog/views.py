@@ -168,7 +168,13 @@ class ProductViewSet(viewsets.ModelViewSet):
         # Permitir listado y detalle público para que Next.js pueda indexar vía SSR
         if self.action in ['list', 'retrieve', 'filter_options']:
             return [AllowAny()]
-        
+
+        # Acciones del panel de gestión de embeddings: permiso global, no por dueño.
+        if self.action in ['embedding_stats', 'regenerate_embedding', 'regenerate_missing_embeddings']:
+            self.required_permission = 'gestion.gestionar_embeddings'
+            self.required_scope = 'todos'
+            return [HasDynamicPermission()]
+
         # Determinar permiso requerido según la acción
         if self.action == 'create':
             self.required_permission = 'catalogo.crear_producto'
@@ -310,7 +316,8 @@ class ProductViewSet(viewsets.ModelViewSet):
             result = genai.embed_content(
                 model="models/gemini-embedding-2",
                 content=query,
-                task_type="retrieval_query"
+                task_type="retrieval_query",
+                output_dimensionality=768
             )
             
             if not result or 'embedding' not in result:
@@ -372,6 +379,83 @@ class ProductViewSet(viewsets.ModelViewSet):
             "results": serializer.data,
             "search_type": "text_fallback",
             "message": "Mostrando resultados clásicos (búsqueda semántica no disponible temporalmente)."
+        })
+
+    @action(detail=False, methods=['get'])
+    def embedding_stats(self, request):
+        """
+        Estado general de los embeddings (RAG) del catálogo, para el panel de
+        gestión. Requiere 'gestion.gestionar_embeddings'.
+        GET /api/catalog/products/embedding_stats/
+        """
+        import os
+        from django.conf import settings
+
+        api_key_configured = bool(getattr(settings, "GOOGLE_API_KEY", "") or os.environ.get("GOOGLE_API_KEY", ""))
+
+        total = Product.objects.count()
+        with_embedding = Product.objects.filter(embedding__isnull=False).count()
+        missing_qs = Product.objects.filter(embedding__isnull=True).order_by('id')
+        with_error = Product.objects.exclude(embedding_error='').order_by('-id')
+
+        return Response({
+            "api_key_configured": api_key_configured,
+            "total": total,
+            "with_embedding": with_embedding,
+            "without_embedding": total - with_embedding,
+            "missing": [
+                {"id": p.id, "sku": p.sku, "name": p.name}
+                for p in missing_qs[:100]
+            ],
+            "recent_errors": [
+                {"id": p.id, "sku": p.sku, "name": p.name, "error": p.embedding_error}
+                for p in with_error[:20]
+            ],
+        })
+
+    @action(detail=True, methods=['post'])
+    def regenerate_embedding(self, request, pk=None):
+        """
+        Regenera (de forma síncrona) el embedding de un producto puntual.
+        Requiere 'gestion.gestionar_embeddings'.
+        POST /api/catalog/products/{id}/regenerate_embedding/
+        """
+        from .tasks import generate_product_embedding
+        product = self.get_object()
+        try:
+            ok = bool(generate_product_embedding(product.id))
+        except Exception as e:
+            Product.objects.filter(id=product.id).update(embedding_error=str(e)[:255])
+            ok = False
+        product.refresh_from_db()
+        return Response({
+            "success": bool(ok),
+            "id": product.id,
+            "sku": product.sku,
+            "embedding_error": product.embedding_error,
+        }, status=status.HTTP_200_OK if ok else status.HTTP_502_BAD_GATEWAY)
+
+    @action(detail=False, methods=['post'])
+    def regenerate_missing_embeddings(self, request):
+        """
+        Regenera (de forma síncrona) el embedding de los productos sin embedding,
+        hasta `limit` por llamada (default 20, máx. 50) para no demorar la respuesta.
+        Requiere 'gestion.gestionar_embeddings'.
+        POST /api/catalog/products/regenerate_missing_embeddings/  {"limit": 20}
+        """
+        from .tasks import regenerate_missing_embeddings as regenerate_missing
+        try:
+            limit = int(request.data.get('limit', 20))
+        except (TypeError, ValueError):
+            limit = 20
+        limit = max(1, min(limit, 50))
+
+        results = regenerate_missing(limit=limit)
+        return Response({
+            "processed": len(results),
+            "succeeded": sum(1 for r in results if r["success"]),
+            "failed": sum(1 for r in results if not r["success"]),
+            "results": results,
         })
 
 

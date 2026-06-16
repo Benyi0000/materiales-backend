@@ -237,3 +237,73 @@ class ProductNewFieldsCartCheckoutIntegrationTest(TestCase):
         item = data['items'][0]
         self.assertEqual(item['product_name'], self.product.name)
         self.assertEqual(item['product_sku'], self.product.sku)
+
+
+class EmbeddingManagementPanelTest(TestCase):
+    """
+    Panel de gestión de embeddings: estadísticas, regeneración individual y
+    masiva, y que las acciones queden protegidas por el permiso atómico
+    'gestion.gestionar_embeddings'.
+    """
+
+    def setUp(self):
+        _mock_rag(self)
+        self.admin = User.objects.create_superuser('admin_embeddings', 'a@test.com', 'pass')
+        self.staff_sin_permiso = User.objects.create_user('staff_sin_permiso', 'b@test.com', 'pass')
+        self.con_embedding = make_construction_product(name='Con embedding')
+        Product.objects.filter(id=self.con_embedding.id).update(embedding=[0.1] * 768)
+        self.sin_embedding_1 = make_construction_product(name='Sin embedding 1')
+        self.sin_embedding_2 = make_construction_product(name='Sin embedding 2')
+
+    def test_embedding_stats_requiere_permiso(self):
+        req = factory.get('/api/catalog/products/embedding_stats/')
+        force_authenticate(req, user=self.staff_sin_permiso)
+        res = ProductViewSet.as_view({'get': 'embedding_stats'})(req)
+        self.assertEqual(res.status_code, 403)
+
+    def test_embedding_stats_devuelve_conteos_correctos(self):
+        req = factory.get('/api/catalog/products/embedding_stats/')
+        force_authenticate(req, user=self.admin)
+        res = ProductViewSet.as_view({'get': 'embedding_stats'})(req)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data['total'], 3)
+        self.assertEqual(res.data['with_embedding'], 1)
+        self.assertEqual(res.data['without_embedding'], 2)
+        missing_names = [p['name'] for p in res.data['missing']]
+        self.assertIn('Sin embedding 1', missing_names)
+        self.assertIn('Sin embedding 2', missing_names)
+        self.assertNotIn('Con embedding', missing_names)
+
+    @patch('catalog.tasks.generate_product_embedding', return_value=True)
+    def test_regenerate_embedding_individual_exitoso(self, mock_gen):
+        req = factory.post(f'/api/catalog/products/{self.sin_embedding_1.id}/regenerate_embedding/')
+        force_authenticate(req, user=self.admin)
+        res = ProductViewSet.as_view({'post': 'regenerate_embedding'})(req, pk=self.sin_embedding_1.id)
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(res.data['success'])
+        mock_gen.assert_called_once_with(self.sin_embedding_1.id)
+
+    @patch('catalog.tasks.generate_product_embedding', return_value=False)
+    def test_regenerate_embedding_individual_fallido_devuelve_502(self, mock_gen):
+        req = factory.post(f'/api/catalog/products/{self.sin_embedding_1.id}/regenerate_embedding/')
+        force_authenticate(req, user=self.admin)
+        res = ProductViewSet.as_view({'post': 'regenerate_embedding'})(req, pk=self.sin_embedding_1.id)
+        self.assertEqual(res.status_code, 502)
+        self.assertFalse(res.data['success'])
+
+    def test_regenerate_embedding_requiere_permiso(self):
+        req = factory.post(f'/api/catalog/products/{self.sin_embedding_1.id}/regenerate_embedding/')
+        force_authenticate(req, user=self.staff_sin_permiso)
+        res = ProductViewSet.as_view({'post': 'regenerate_embedding'})(req, pk=self.sin_embedding_1.id)
+        self.assertEqual(res.status_code, 403)
+
+    @patch('catalog.tasks.generate_product_embedding', return_value=True)
+    def test_regenerate_missing_embeddings_batch(self, mock_gen):
+        req = factory.post('/api/catalog/products/regenerate_missing_embeddings/', {'limit': 10}, format='json')
+        force_authenticate(req, user=self.admin)
+        res = ProductViewSet.as_view({'post': 'regenerate_missing_embeddings'})(req)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data['processed'], 2)
+        self.assertEqual(res.data['succeeded'], 2)
+        self.assertEqual(res.data['failed'], 0)
+        self.assertEqual(mock_gen.call_count, 2)
