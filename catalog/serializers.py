@@ -19,12 +19,16 @@ class ProductSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source='category.name', read_only=True)
     created_by_username = serializers.CharField(source='created_by.username', read_only=True)
     subcategory_names = serializers.SerializerMethodField()
+    unit_of_sale_display = serializers.CharField(source='get_unit_of_sale_display', read_only=True)
+    material_display = serializers.CharField(source='get_material_display', read_only=True)
 
     class Meta:
         model = Product
         fields = (
             'id', 'sku', 'name', 'description', 'price', 'stock', 'min_stock',
-            'weight_kg', 'image_url', 'category', 'category_name',
+            'weight_kg', 'length_cm', 'width_cm', 'height_cm',
+            'unit_of_sale', 'unit_of_sale_display', 'brand', 'material', 'material_display',
+            'image_url', 'category', 'category_name',
             'subcategories', 'subcategory_names', 'is_active',
             'technical_pdf_url', 'created_by', 'created_by_username'
         )

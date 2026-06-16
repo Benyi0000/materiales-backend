@@ -32,6 +32,31 @@ class Product(models.Model):
     Modelo de Producto para el E-commerce.
     RNF 2: pgvector implementado con campo embedding de 384 dimensiones.
     """
+    UNIT_CHOICES = (
+        ('unidad', 'Unidad'),
+        ('kg', 'Kilogramo'),
+        ('m', 'Metro'),
+        ('m2', 'Metro cuadrado'),
+        ('m3', 'Metro cúbico'),
+        ('litro', 'Litro'),
+        ('bolsa', 'Bolsa'),
+        ('rollo', 'Rollo'),
+        ('par', 'Par'),
+        ('caja', 'Caja'),
+        ('pallet', 'Pallet'),
+    )
+    MATERIAL_CHOICES = (
+        ('cemento', 'Cemento / Hormigón'),
+        ('madera', 'Madera'),
+        ('metal', 'Metal / Acero'),
+        ('plastico', 'Plástico / PVC'),
+        ('ceramico', 'Cerámico'),
+        ('vidrio', 'Vidrio'),
+        ('pintura', 'Pintura / Química'),
+        ('electrico', 'Eléctrico'),
+        ('otro', 'Otro'),
+    )
+
     sku = models.CharField(max_length=100, unique=True)
     name = models.CharField(max_length=255)
     description = models.TextField()
@@ -39,6 +64,12 @@ class Product(models.Model):
     stock = models.IntegerField(default=0)
     min_stock = models.PositiveIntegerField(default=5, help_text="Umbral mínimo: por debajo se considera stock bajo")
     weight_kg = models.DecimalField(max_digits=6, decimal_places=2, help_text="Peso en kilogramos para lógica logística")
+    length_cm = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True, help_text="Largo en centímetros")
+    width_cm = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True, help_text="Ancho en centímetros")
+    height_cm = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True, help_text="Alto en centímetros")
+    unit_of_sale = models.CharField(max_length=10, choices=UNIT_CHOICES, default='unidad', help_text="Unidad en la que se vende el producto")
+    brand = models.CharField(max_length=100, blank=True, help_text="Marca o fabricante")
+    material = models.CharField(max_length=20, choices=MATERIAL_CHOICES, blank=True, help_text="Material principal del producto")
     image_url = models.URLField(max_length=512, blank=True, null=True)
     category = models.ForeignKey(Category, on_delete=models.PROTECT, related_name='products')
     subcategories = models.ManyToManyField(Category, related_name='multi_products', blank=True, help_text="Subcategorías a las que pertenece el producto")

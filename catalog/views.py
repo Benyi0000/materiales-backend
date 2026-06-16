@@ -149,8 +149,11 @@ class ProductViewSet(viewsets.ModelViewSet):
     serializer_class = ProductSerializer
     pagination_class = StandardResultsSetPagination
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['category', 'category__slug', 'category__name', 'subcategories', 'subcategories__slug', 'is_active']
-    search_fields = ['name', 'description', 'sku']
+    filterset_fields = [
+        'category', 'category__slug', 'category__name', 'subcategories', 'subcategories__slug',
+        'is_active', 'brand', 'material', 'unit_of_sale',
+    ]
+    search_fields = ['name', 'description', 'sku', 'brand']
     ordering_fields = ['price', 'name', 'stock']
 
     def get_queryset(self):
@@ -163,7 +166,7 @@ class ProductViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         # Permitir listado y detalle público para que Next.js pueda indexar vía SSR
-        if self.action in ['list', 'retrieve']:
+        if self.action in ['list', 'retrieve', 'filter_options']:
             return [AllowAny()]
         
         # Determinar permiso requerido según la acción
@@ -264,6 +267,21 @@ class ProductViewSet(viewsets.ModelViewSet):
 
         serializer = self.get_serializer(product)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get'])
+    def filter_options(self, request):
+        """
+        Opciones disponibles para los filtros del catálogo público: marcas en uso
+        (de productos activos) y los choices fijos de unidad de venta y material.
+        GET /api/catalog/products/filter_options/
+        """
+        brands = (
+            Product.objects.filter(is_active=True, brand__gt='')
+            .order_by('brand').values_list('brand', flat=True).distinct()
+        )
+        units = [{"value": v, "label": l} for v, l in Product.UNIT_CHOICES]
+        materials = [{"value": v, "label": l} for v, l in Product.MATERIAL_CHOICES]
+        return Response({"brands": list(brands), "units": units, "materials": materials})
 
     @action(detail=False, methods=['get'])
     def semantic_search(self, request):
