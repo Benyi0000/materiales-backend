@@ -596,6 +596,17 @@ class MercadoPagoPreferenceView(APIView):
         import mercadopago
 
         user = request.user
+
+        # MercadoPago como medio de pago está sujeto al permiso atómico
+        # 'pagos.mercadopago'. Si el gestor de perfiles lo deshabilitó, el
+        # método no debe poder usarse (enforcement server-side, además del
+        # ocultamiento en el frontend).
+        if not has_custom_permission(user, 'pagos.mercadopago'):
+            return Response(
+                {"error": "El pago con MercadoPago no está habilitado para tu cuenta."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         raw_shipping = request.data.get('shipping', {})
         delivery_type = request.data.get('delivery_type', 'standard')
 
