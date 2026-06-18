@@ -1,12 +1,9 @@
 import json
-from urllib.parse import quote_plus
 from django.conf import settings
-from django.core.exceptions import ObjectDoesNotExist
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
-from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
-from langchain_postgres import PGVector
 
 from .models import ChatbotSession, ChatbotMessage
 
@@ -51,27 +48,33 @@ class RAGQueryService:
                 for p in products
             ])
         else:
-            password = quote_plus(db_settings["PASSWORD"])
-            # Construir la URL de conexión para SQLAlchemy/PGVector
-            VECTOR_DB_URL = f"postgresql://{db_settings['USER']}:{password}@{db_settings['HOST']}:{db_settings['PORT']}/{db_settings['NAME']}"
+            import google.generativeai as genai
+            from pgvector.django import L2Distance
+            from catalog.models import Product as CatalogProduct
 
-            embeddings = GoogleGenerativeAIEmbeddings(
-                model="gemini-embedding-2", api_key=api_key
-            )
-            
-            vector_store = PGVector(
-                embeddings=embeddings,
-                collection_name="product_embeddings",
-                connection=VECTOR_DB_URL,
-                use_jsonb=True,
-            )
-
-            # Realizar la búsqueda vectorial de similitud en PGVector
+            genai.configure(api_key=api_key)
             try:
-                retriever = vector_store.similarity_search(user_text, k=5)
-                contexto = "\n\n".join([doc.page_content for doc in retriever])
+                embed_result = genai.embed_content(
+                    model="models/gemini-embedding-2",
+                    content=user_text,
+                    task_type="retrieval_query",
+                    output_dimensionality=768
+                )
+                query_vector = embed_result['embedding']
+
+                products = CatalogProduct.objects.filter(
+                    embedding__isnull=False,
+                    is_active=True,
+                ).order_by(L2Distance('embedding', query_vector))[:5]
+
+                contexto = "\n\n".join([
+                    f"Producto: {p.name}\nSKU: {p.sku}\nPrecio: ${p.price}\nDescripción: {p.description}"
+                    f"\nStock: {p.stock} {p.unit_of_sale} disponibles"
+                    + (f"\nMarca: {p.brand}" if p.brand else "")
+                    + (f"\nMaterial: {p.get_material_display()}" if p.material else "")
+                    for p in products
+                ])
             except Exception as e:
-                # Si pgvector o la colección no están inicializados aún, informamos o fallamos graciosamente
                 contexto = ""
                 print(f"Advertencia en búsqueda vectorial: {e}")
 
