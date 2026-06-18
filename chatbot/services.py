@@ -26,23 +26,26 @@ class RAGQueryService:
         db_settings = settings.DATABASES[db_key]
         
         contexto = ""
-        
+        total_activos = 0
+        productos_mostrados = 0
+
         if db_settings["ENGINE"] == "django.db.backends.sqlite3":
-            # Si usa SQLite (fallback de desarrollo), buscamos usando el ORM de Django tradicional
             from django.db.models import Q
             from catalog.models import Product
-            
+
+            total_activos = Product.objects.filter(is_active=True).count()
             words = user_text.split()
             query_filter = Q()
             for word in words:
                 if len(word) > 2:
                     query_filter |= Q(name__icontains=word) | Q(description__icontains=word)
-            
+
             if query_filter:
-                products = Product.objects.filter(query_filter)[:5]
+                products = list(Product.objects.filter(query_filter)[:5])
             else:
-                products = Product.objects.all()[:5]
-                
+                products = list(Product.objects.all()[:5])
+
+            productos_mostrados = len(products)
             contexto = "\n\n".join([
                 f"Producto: {p.name}\nSKU: {p.sku}\nPrecio: {p.price}\nDescripción: {p.description}\nCategoría: {p.category.name if p.category else 'General'}"
                 for p in products
@@ -52,6 +55,7 @@ class RAGQueryService:
             from pgvector.django import L2Distance
             from catalog.models import Product as CatalogProduct
 
+            total_activos = CatalogProduct.objects.filter(is_active=True).count()
             genai.configure(api_key=api_key)
             try:
                 embed_result = genai.embed_content(
@@ -62,11 +66,12 @@ class RAGQueryService:
                 )
                 query_vector = embed_result['embedding']
 
-                products = CatalogProduct.objects.filter(
+                products = list(CatalogProduct.objects.filter(
                     embedding__isnull=False,
                     is_active=True,
-                ).order_by(L2Distance('embedding', query_vector))[:5]
+                ).order_by(L2Distance('embedding', query_vector))[:5])
 
+                productos_mostrados = len(products)
                 contexto = "\n\n".join([
                     f"Producto: {p.name}\nSKU: {p.sku}\nPrecio: ${p.price}\nDescripción: {p.description}"
                     f"\nStock: {p.stock} {p.unit_of_sale} disponibles"
@@ -118,7 +123,11 @@ class RAGQueryService:
                     "4. Si la consulta es del dominio pero no está en el catálogo, puedes responder con conocimiento general sin precios.\n"
                     "5. Si hay contexto de internet, úsalo SOLO cuando el catálogo esté vacío y la consulta sea simple sobre un producto. Aclara que el stock no está confirmado.\n"
                     "6. Si usas internet, NO digas que buscaste en internet; solo responde con la informacion.\n\n"
-                    f"--- CONTEXTO DE PRODUCTOS DISPONIBLES ---\n{contexto}\n\n"
+                    f"--- CONTEXTO DE PRODUCTOS DISPONIBLES ---\n"
+                    f"(El catálogo tiene {total_activos} productos activos en total. "
+                    f"Se muestran los {productos_mostrados} más relevantes para esta consulta según búsqueda semántica. "
+                    f"Si el cliente pregunta por algo que no aparece aquí, puede existir en el catálogo pero no ser relevante para su búsqueda actual.)\n\n"
+                    f"{contexto}\n\n"
                     f"--- CONTEXTO DE INTERNET (si aplica) ---\n{internet_context}"
                 )
             ),
