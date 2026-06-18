@@ -161,3 +161,19 @@ class Banner(models.Model):
 
     def __str__(self):
         return self.title or f"Banner #{self.id}"
+
+
+class SystemSetting(models.Model):
+    """Key-value store for sensitive system settings (API keys, tokens)."""
+    key = models.CharField(max_length=100, unique=True)
+    value = models.TextField()
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(
+        'auth.User',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='system_settings',
+    )
+
+    def __str__(self):
+        return self.key

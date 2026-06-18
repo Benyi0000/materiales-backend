@@ -6,6 +6,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
 
 from .models import ChatbotSession, ChatbotMessage
+from catalog.utils import get_google_api_key
 
 class RAGQueryService:
     def query(self, session_id: str, user_text: str):
@@ -13,13 +14,9 @@ class RAGQueryService:
         session = ChatbotSession.objects.get(id=session_id)
         ChatbotMessage.objects.create(session=session, role="user", content=user_text)
 
-        # Usar la API Key de Google configurada en settings
-        api_key = getattr(settings, "GOOGLE_API_KEY", "")
+        api_key = get_google_api_key()
         if not api_key:
-            import os
-            api_key = os.environ.get("GOOGLE_API_KEY", "")
-            if not api_key:
-                raise ValueError("La variable GOOGLE_API_KEY no está configurada en sus variables de entorno o settings.py.")
+            raise ValueError("La variable GOOGLE_API_KEY no está configurada.")
 
         # Configurar la conexión a la base de datos para PGVector de forma flexible
         db_key = "rag" if "rag" in settings.DATABASES else "default"
@@ -73,7 +70,8 @@ class RAGQueryService:
 
                 productos_mostrados = len(products)
                 contexto = "\n\n".join([
-                    f"Producto: {p.name}\nSKU: {p.sku}\nPrecio: ${p.price}\nDescripción: {p.description}"
+                    f"Producto: {p.name}\nSKU: {p.sku}\nPrecio: ${p.price}"
+                    f"\nDescripción: {p.description[:150]}"
                     f"\nStock: {p.stock} {p.unit_of_sale} disponibles"
                     + (f"\nMarca: {p.brand}" if p.brand else "")
                     + (f"\nMaterial: {p.get_material_display()}" if p.material else "")
@@ -88,8 +86,12 @@ class RAGQueryService:
             internet_context = self._search_internet(user_text)
 
         # Construir el historial de mensajes para el modelo de lenguaje
+        # Límite de 10 mensajes (5 turnos) para controlar el consumo de tokens
+        MAX_HISTORY = 10
         db_messages = session.messages.order_by("created_at").values("role", "content")
-        es_primer_mensaje = not any(m["role"] == "assistant" for m in db_messages)
+        all_messages = list(db_messages)
+        es_primer_mensaje = not any(m["role"] == "assistant" for m in all_messages)
+        db_messages = all_messages[-MAX_HISTORY:]
 
         saludo_regla = (
             "Es el PRIMER mensaje de la sesión: podés saludar brevemente (ej. 'Hola,')."

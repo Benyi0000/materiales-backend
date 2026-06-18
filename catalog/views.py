@@ -12,7 +12,8 @@ from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
 from django.conf import settings
 from django.db.models import F
-from .models import Category, Product, StockMovement, Banner
+from .models import Category, Product, StockMovement, Banner, SystemSetting
+from .utils import get_google_api_key
 from .serializers import (
     CategorySerializer, ProductSerializer, StockMovementSerializer,
     LowStockProductSerializer, BannerSerializer,
@@ -170,7 +171,8 @@ class ProductViewSet(viewsets.ModelViewSet):
             return [AllowAny()]
 
         # Acciones del panel de gestión de embeddings: permiso global, no por dueño.
-        if self.action in ['embedding_stats', 'regenerate_embedding', 'regenerate_missing_embeddings']:
+        if self.action in ['embedding_stats', 'regenerate_embedding', 'regenerate_missing_embeddings',
+                           'api_key_status', 'update_api_key', 'verify_api_key']:
             self.required_permission = 'gestion.gestionar_embeddings'
             self.required_scope = 'todos'
             return [HasDynamicPermission()]
@@ -300,13 +302,9 @@ class ProductViewSet(viewsets.ModelViewSet):
             return Response({"error": "Debe proporcionar un parámetro de búsqueda 'q'."}, status=status.HTTP_400_BAD_REQUEST)
 
         # 1. Vectorizar la consulta usando Google Gemini
-        import os
-        from django.conf import settings
         import google.generativeai as genai
-        
-        api_key = getattr(settings, "GOOGLE_API_KEY", "")
-        if not api_key:
-            api_key = os.environ.get("GOOGLE_API_KEY", "")
+
+        api_key = get_google_api_key()
             
         if not api_key:
             return self._fallback_text_search(query)
@@ -388,10 +386,7 @@ class ProductViewSet(viewsets.ModelViewSet):
         gestión. Requiere 'gestion.gestionar_embeddings'.
         GET /api/catalog/products/embedding_stats/
         """
-        import os
-        from django.conf import settings
-
-        api_key_configured = bool(getattr(settings, "GOOGLE_API_KEY", "") or os.environ.get("GOOGLE_API_KEY", ""))
+        api_key_configured = bool(get_google_api_key())
 
         total = Product.objects.count()
         with_embedding = Product.objects.filter(embedding__isnull=False).count()
@@ -457,6 +452,72 @@ class ProductViewSet(viewsets.ModelViewSet):
             "failed": sum(1 for r in results if not r["success"]),
             "results": results,
         })
+
+    @action(detail=False, methods=['get'])
+    def api_key_status(self, request):
+        """
+        Estado de la API key de Google Gemini sin revelarla.
+        GET /api/catalog/products/api_key_status/
+        """
+        db_setting = SystemSetting.objects.filter(key='GOOGLE_API_KEY').first()
+        if db_setting and db_setting.value:
+            return Response({
+                "configured": True,
+                "source": "database",
+                "updated_at": db_setting.updated_at.strftime("%d/%m/%Y %H:%M"),
+            })
+        import os
+        env_key = getattr(settings, 'GOOGLE_API_KEY', '') or os.environ.get('GOOGLE_API_KEY', '')
+        if env_key:
+            return Response({"configured": True, "source": "environment", "updated_at": None})
+        return Response({"configured": False, "source": None, "updated_at": None})
+
+    @action(detail=False, methods=['post'])
+    def update_api_key(self, request):
+        """
+        Guarda una nueva API key de Google Gemini en la base de datos.
+        POST /api/catalog/products/update_api_key/  {"api_key": "AIza..."}
+        """
+        new_key = (request.data.get('api_key') or '').strip()
+        if not new_key:
+            return Response({"error": "Debe proporcionar el campo 'api_key'."}, status=status.HTTP_400_BAD_REQUEST)
+        if len(new_key) < 20:
+            return Response({"error": "La key parece inválida (muy corta)."}, status=status.HTTP_400_BAD_REQUEST)
+
+        setting, _ = SystemSetting.objects.update_or_create(
+            key='GOOGLE_API_KEY',
+            defaults={'value': new_key, 'updated_by': request.user},
+        )
+        return Response({
+            "success": True,
+            "source": "database",
+            "updated_at": setting.updated_at.strftime("%d/%m/%Y %H:%M"),
+        })
+
+    @action(detail=False, methods=['post'])
+    def verify_api_key(self, request):
+        """
+        Verifica que la API key configurada pueda conectarse a Gemini.
+        POST /api/catalog/products/verify_api_key/
+        """
+        import google.generativeai as genai
+
+        api_key = get_google_api_key()
+        if not api_key:
+            return Response({"success": False, "error": "No hay API key configurada."})
+        try:
+            genai.configure(api_key=api_key)
+            result = genai.embed_content(
+                model="models/gemini-embedding-2",
+                content="test",
+                task_type="retrieval_query",
+                output_dimensionality=768,
+            )
+            if result and 'embedding' in result:
+                return Response({"success": True})
+            return Response({"success": False, "error": "Respuesta inesperada de la API."})
+        except Exception as e:
+            return Response({"success": False, "error": str(e)[:200]})
 
 
 from django.core.files.storage import default_storage

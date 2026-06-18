@@ -1,9 +1,8 @@
-import os
 import logging
 from celery import shared_task
-from django.conf import settings
 from django.utils import timezone
 from .models import Product
+from .utils import get_google_api_key
 
 logger = logging.getLogger('catalog.audit')
 
@@ -22,10 +21,7 @@ def generate_product_embedding(self, product_id):
 
         import google.generativeai as genai
 
-        # Obtener API KEY (preferir settings, luego .env)
-        api_key = getattr(settings, "GOOGLE_API_KEY", "")
-        if not api_key:
-            api_key = os.environ.get("GOOGLE_API_KEY", "")
+        api_key = get_google_api_key()
 
         if not api_key:
             logger.error("RAG Error: GOOGLE_API_KEY no configurada. No se puede generar vector.")
